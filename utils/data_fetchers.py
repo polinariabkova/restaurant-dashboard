@@ -1115,45 +1115,42 @@ def get_franchise_box_office() -> pd.DataFrame:
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_containerboard_price_increases() -> pd.DataFrame:
     """
-    Scrape RSS feeds for containerboard / corrugated price increase announcements.
-    Returns DataFrame with date, headline, source.
+    Fetch containerboard / corrugated price increase news via Google News RSS.
+    Returns DataFrame with Date, Headline, Source.
     """
     import requests
     from bs4 import BeautifulSoup
 
-    _FEEDS = {
-        "BusinessWire": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJbWJg",
-        "PR Newswire": "https://www.prnewswire.com/rss/news-releases-list.rss",
-        "Reuters Business": "https://feeds.reuters.com/reuters/businessNews",
-    }
-    _KEYWORDS = [
-        "containerboard", "price increase", "linerboard",
-        "corrugating medium", "corrugated", "price hike",
-        "packaging price", "box price",
+    queries = [
+        "containerboard price increase",
+        "linerboard price increase",
+        "corrugated price hike",
     ]
-
     rows = []
-    for source, url in _FEEDS.items():
+    seen: set = set()
+    for q in queries:
+        url = (
+            f"https://news.google.com/rss/search?"
+            f"q={q.replace(' ', '+')}&hl=en-US&gl=US&ceid=US:en"
+        )
         try:
-            r = requests.get(url, timeout=15,
+            r = requests.get(url, timeout=20,
                              headers={"User-Agent": "Mozilla/5.0"})
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "xml")
-            items = soup.find_all("item")[:100]  # scan up to 100 items per feed
-            for item in items:
+            for item in soup.find_all("item")[:50]:
                 title_text = (item.title.text if item.title else "").strip()
-                desc_text = (item.description.text if item.description else "").strip()
-                combined = (title_text + " " + desc_text).lower()
-
-                if any(kw in combined for kw in _KEYWORDS):
-                    pub_date = item.pubDate.text.strip() if item.pubDate else ""
-                    link = item.link.text.strip() if item.link else ""
-                    rows.append({
-                        "Date": pub_date,
-                        "Headline": title_text[:200],
-                        "Source": source,
-                        "Link": link,
-                    })
+                if title_text in seen:
+                    continue
+                seen.add(title_text)
+                pub_date = item.pubDate.text.strip() if item.pubDate else ""
+                source_tag = item.find("source")
+                source = source_tag.text.strip() if source_tag else "Google News"
+                rows.append({
+                    "Date": pub_date,
+                    "Headline": title_text[:200],
+                    "Source": source,
+                })
         except Exception:
             continue
 
@@ -1167,42 +1164,41 @@ def get_containerboard_price_increases() -> pd.DataFrame:
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_pp_curtailment_news() -> pd.DataFrame:
     """
-    Scrape RSS feeds for P&P downtime / curtailment announcements.
-    Returns DataFrame with date, headline, source.
+    Fetch P&P downtime / curtailment / mill closure news via Google News RSS.
+    Returns DataFrame with Date, Headline, Source.
     """
     import requests
     from bs4 import BeautifulSoup
 
-    _FEEDS = {
-        "BusinessWire": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJbWJg",
-        "Reuters Business": "https://feeds.reuters.com/reuters/businessNews",
-    }
-    _KEYWORDS = [
-        "downtime", "curtailment", "maintenance outage", "capacity reduction",
-        "mill closure", "idled", "containerboard shutdown", "paper mill",
-        "pulp mill", "capacity curtail",
+    queries = [
+        "containerboard OR paper mill downtime OR curtailment OR closure",
+        "paper mill capacity reduction OR idled",
     ]
-
     rows = []
-    for source, url in _FEEDS.items():
+    seen: set = set()
+    for q in queries:
+        url = (
+            f"https://news.google.com/rss/search?"
+            f"q={q.replace(' ', '+')}&hl=en-US&gl=US&ceid=US:en"
+        )
         try:
-            r = requests.get(url, timeout=15,
+            r = requests.get(url, timeout=20,
                              headers={"User-Agent": "Mozilla/5.0"})
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "xml")
-            items = soup.find_all("item")[:100]
-            for item in items:
+            for item in soup.find_all("item")[:50]:
                 title_text = (item.title.text if item.title else "").strip()
-                desc_text = (item.description.text if item.description else "").strip()
-                combined = (title_text + " " + desc_text).lower()
-
-                if any(kw in combined for kw in _KEYWORDS):
-                    pub_date = item.pubDate.text.strip() if item.pubDate else ""
-                    rows.append({
-                        "Date": pub_date,
-                        "Headline": title_text[:200],
-                        "Source": source,
-                    })
+                if title_text in seen:
+                    continue
+                seen.add(title_text)
+                pub_date = item.pubDate.text.strip() if item.pubDate else ""
+                source_tag = item.find("source")
+                source = source_tag.text.strip() if source_tag else "Google News"
+                rows.append({
+                    "Date": pub_date,
+                    "Headline": title_text[:200],
+                    "Source": source,
+                })
         except Exception:
             continue
 

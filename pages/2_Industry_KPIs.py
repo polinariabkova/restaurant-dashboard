@@ -510,8 +510,8 @@ elif cfg["name"] == "Movie Theaters":
         if len(cy_data) > 1:
             prev_wk_gross = cy_data.iloc[-2].get("combined_gross")
 
-    # Display metric cards — Row 1
-    c1, c2, c3 = st.columns(3)
+    # Display metric cards — all in one row
+    c1, c2, c3, c4 = st.columns(4)
 
     if latest_wk_gross:
         wow_delta = None
@@ -545,14 +545,12 @@ elif cfg["name"] == "Movie Theaters":
         c3.metric("YTD Box Office", f"${ytd_cy:,.0f}", delta=ytd_delta, delta_color="normal")
         add_export_metric("YTD BO", f"${ytd_cy:,.0f}", ytd_delta or "")
 
-    # Row 2: Avg ticket price
     if not annual_df.empty:
         latest_year = annual_df.iloc[0]
         yr_label = int(latest_year["Year"]) if "Year" in latest_year.index else ""
         if latest_year.get("Avg Ticket Price"):
-            c4_col, _ = st.columns([1, 3])
-            c4_col.metric(
-                f"Avg Ticket Price ({yr_label})" if yr_label else "Avg Ticket Price",
+            c4.metric(
+                f"Avg Ticket ({yr_label})" if yr_label else "Avg Ticket Price",
                 f"${latest_year['Avg Ticket Price']:.2f}",
             )
 
