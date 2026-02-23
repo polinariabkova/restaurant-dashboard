@@ -320,8 +320,33 @@ def fred_key_available() -> bool:
 # ── Box Office data (The Numbers) ─────────────────────────────────────────
 
 _NUMBERS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
 }
+
+_NUMBERS_TIMEOUT = 30  # seconds — The Numbers can be slow
+
+
+def _fetch_numbers_page(url: str, retries: int = 2):
+    """Fetch a page from The Numbers with retry logic."""
+    import requests, time
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, headers=_NUMBERS_HEADERS, timeout=_NUMBERS_TIMEOUT)
+            r.raise_for_status()
+            return r.text
+        except Exception:
+            if attempt < retries:
+                time.sleep(1 + attempt)
+                continue
+            return None
 
 
 def _parse_money(text: str) -> float | None:
@@ -345,21 +370,17 @@ def _parse_int(text: str) -> int | None:
 def get_weekly_box_office() -> pd.DataFrame:
     """
     Scrape the current weekly (Fri-Thu) box office chart from The Numbers.
-    Returns DataFrame: rank, new, title, distributor, gross, pct_lw, theaters,
-                       theaters_chg, per_theater, total_gross
+    Returns DataFrame: Rank, New, Title, Distributor, Gross, % vs LW,
+                       Theaters, Per Theater, Total Gross, Weeks
     """
-    import requests
     from bs4 import BeautifulSoup
 
-    try:
-        r = requests.get(
-            "https://www.the-numbers.com/weekly-box-office-chart",
-            headers=_NUMBERS_HEADERS, timeout=15,
-        )
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+    html = _fetch_numbers_page("https://www.the-numbers.com/weekly-box-office-chart")
+    if not html:
+        return pd.DataFrame()
 
-        # Table with class containing 'dataTable' is the main chart
+    try:
+        soup = BeautifulSoup(html, "lxml")
         table = soup.find("table", class_="dataTable")
         if not table:
             tables = soup.find_all("table")
@@ -367,8 +388,17 @@ def get_weekly_box_office() -> pd.DataFrame:
         if not table:
             return pd.DataFrame()
 
+        # Parse the chart date from page title / header
+        chart_date = None
+        title_tag = soup.find("h1")
+        if title_tag:
+            import re
+            date_match = re.search(r"((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}[\s,]+\d{4})", title_tag.text)
+            if date_match:
+                chart_date = pd.to_datetime(date_match.group(1), errors="coerce")
+
         rows = []
-        for tr in table.find_all("tr")[1:]:  # skip header
+        for tr in table.find_all("tr")[1:]:
             cells = [td.text.strip() for td in tr.find_all("td")]
             if len(cells) < 10:
                 continue
@@ -382,8 +412,12 @@ def get_weekly_box_office() -> pd.DataFrame:
                 "Theaters": _parse_int(cells[6]),
                 "Per Theater": _parse_money(cells[8]),
                 "Total Gross": _parse_money(cells[9]),
+                "Weeks": _parse_int(cells[10]) if len(cells) > 10 else None,
             })
-        return pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
+        if chart_date is not None and not df.empty:
+            df.attrs["chart_date"] = chart_date
+        return df
     except Exception:
         return pd.DataFrame()
 
@@ -392,29 +426,38 @@ def get_weekly_box_office() -> pd.DataFrame:
 def get_weekly_box_office_trend(year: int) -> pd.DataFrame:
     """
     Scrape weekly combined weekend BO totals from The Numbers /market/{year}/summary.
-    Table 2 has: Weekend, No.1 Movie, Weeks in Release, No.1 BO, Combined Weekend BO.
+    Returns: weekend_date, no1_movie, no1_gross, combined_gross
     """
-    import requests
     from bs4 import BeautifulSoup
 
+    html = _fetch_numbers_page(f"https://www.the-numbers.com/market/{year}/summary")
+    if not html:
+        return pd.DataFrame()
+
     try:
-        r = requests.get(
-            f"https://www.the-numbers.com/market/{year}/summary",
-            headers=_NUMBERS_HEADERS, timeout=15,
-        )
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        soup = BeautifulSoup(html, "lxml")
         tables = soup.find_all("table")
 
-        # Table 2 is the weekly summary
-        if len(tables) < 3:
+        # Find the weekly summary table — the one with "combined" in header
+        # (Table 2 on the page: Weekend, No.1 Movie, ..., Combined Weekend Box Office)
+        table = None
+        for t in tables:
+            first_row = t.find("tr")
+            if first_row:
+                header_text = first_row.text.lower()
+                if "combined" in header_text and "weekend" in header_text:
+                    table = t
+                    break
+        # Fallback: use table index 2 (stable position on the-numbers.com)
+        if not table and len(tables) >= 3:
+            table = tables[2]
+        if not table:
             return pd.DataFrame()
-        table = tables[2]
 
         rows = []
         for tr in table.find_all("tr")[1:]:
             cells = [td.text.strip() for td in tr.find_all("td")]
-            if len(cells) < 6:
+            if len(cells) < 5:
                 continue
             try:
                 wk_date = pd.to_datetime(cells[0])
@@ -423,8 +466,8 @@ def get_weekly_box_office_trend(year: int) -> pd.DataFrame:
             rows.append({
                 "weekend_date": wk_date,
                 "no1_movie": cells[1],
-                "no1_gross": _parse_money(cells[3]),
-                "combined_gross": _parse_money(cells[4]),
+                "no1_gross": _parse_money(cells[3]) if len(cells) > 3 else None,
+                "combined_gross": _parse_money(cells[4]) if len(cells) > 4 else None,
             })
         df = pd.DataFrame(rows)
         if not df.empty:
@@ -435,21 +478,51 @@ def get_weekly_box_office_trend(year: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
+def get_weekly_box_office_52w() -> pd.DataFrame:
+    """
+    Get the last 52 weeks of combined weekend box office data.
+    Merges current year + prior year data from The Numbers.
+    Returns: weekend_date, no1_movie, no1_gross, combined_gross, year, week_num
+    """
+    import datetime
+    now = datetime.datetime.now()
+    current_year = now.year
+    frames = []
+
+    for yr in [current_year, current_year - 1]:
+        df = get_weekly_box_office_trend(yr)
+        if not df.empty:
+            frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.sort_values("weekend_date").reset_index(drop=True)
+
+    # Keep only last 52 weeks
+    cutoff = now - datetime.timedelta(weeks=52)
+    combined = combined[combined["weekend_date"] >= pd.Timestamp(cutoff)]
+    combined["year"] = combined["weekend_date"].dt.year
+    combined["week_num"] = combined["weekend_date"].dt.isocalendar().week.astype(int)
+
+    return combined.reset_index(drop=True)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_annual_box_office() -> pd.DataFrame:
     """
     Scrape annual domestic BO totals from The Numbers /market/.
     Table 0: Year, Tickets Sold, Total Box Office, Inflation Adjusted, Avg Ticket Price.
     """
-    import requests
     from bs4 import BeautifulSoup
 
+    html = _fetch_numbers_page("https://www.the-numbers.com/market/")
+    if not html:
+        return pd.DataFrame()
+
     try:
-        r = requests.get(
-            "https://www.the-numbers.com/market/",
-            headers=_NUMBERS_HEADERS, timeout=15,
-        )
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        soup = BeautifulSoup(html, "lxml")
         tables = soup.find_all("table")
         if not tables:
             return pd.DataFrame()
@@ -475,18 +548,16 @@ def get_annual_box_office() -> pd.DataFrame:
 def get_release_schedule() -> pd.DataFrame:
     """
     Scrape upcoming movie release schedule from The Numbers.
-    Returns: date, movie, distributor, bo_to_date
+    Returns: Date, Movie, Distributor, BO to Date
     """
-    import requests
     from bs4 import BeautifulSoup
 
+    html = _fetch_numbers_page("https://www.the-numbers.com/movies/release-schedule")
+    if not html:
+        return pd.DataFrame()
+
     try:
-        r = requests.get(
-            "https://www.the-numbers.com/movies/release-schedule",
-            headers=_NUMBERS_HEADERS, timeout=15,
-        )
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        soup = BeautifulSoup(html, "lxml")
         table = soup.find("table")
         if not table:
             return pd.DataFrame()
@@ -496,7 +567,6 @@ def get_release_schedule() -> pd.DataFrame:
         for tr in table.find_all("tr")[1:]:
             cells = tr.find_all("td")
             if len(cells) == 1:
-                # Month header row
                 current_month = cells[0].text.strip()
                 continue
             if len(cells) < 4:
@@ -510,7 +580,6 @@ def get_release_schedule() -> pd.DataFrame:
             distributor = cells[2].text.strip()
             bo = cells[3].text.strip()
 
-            # Parse date: "February 21" → full date using current_month's year
             try:
                 full_date = f"{date_text}, {current_month.split()[-1]}" if current_month else date_text
                 parsed_date = pd.to_datetime(full_date, format="mixed", dayfirst=False)
@@ -539,24 +608,28 @@ def get_release_schedule() -> pd.DataFrame:
 def get_annual_distributor_share(year: int) -> pd.DataFrame:
     """
     Scrape annual studio market share from The Numbers /market/{year}/summary.
-    Table 3 has: Distributor, Movies, Total Gross, Market Share.
     """
-    import requests
     from bs4 import BeautifulSoup
 
+    html = _fetch_numbers_page(f"https://www.the-numbers.com/market/{year}/summary")
+    if not html:
+        return pd.DataFrame()
+
     try:
-        r = requests.get(
-            f"https://www.the-numbers.com/market/{year}/summary",
-            headers=_NUMBERS_HEADERS, timeout=15,
-        )
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        soup = BeautifulSoup(html, "lxml")
         tables = soup.find_all("table")
 
-        # Table 3 is the studio market share table
-        if len(tables) < 4:
+        # Find the distributor table — it has "Distributor" in header
+        table = None
+        for t in tables:
+            first_row = t.find("tr")
+            if first_row and "distributor" in first_row.text.lower():
+                table = t
+                break
+        if not table and len(tables) >= 4:
+            table = tables[3]
+        if not table:
             return pd.DataFrame()
-        table = tables[3]
 
         rows = []
         for tr in table.find_all("tr")[1:]:

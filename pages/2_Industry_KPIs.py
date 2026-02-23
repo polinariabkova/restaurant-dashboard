@@ -408,8 +408,9 @@ elif cfg["name"] == "Movie Theaters":
     # ═══════════════════════════════════════════════════════════════════════
     from utils.data_fetchers import (
         get_weekly_box_office, get_weekly_box_office_trend,
-        get_annual_box_office, get_release_schedule,
-        get_distributor_share_multi_year, get_franchise_box_office,
+        get_weekly_box_office_52w, get_annual_box_office,
+        get_release_schedule, get_distributor_share_multi_year,
+        get_franchise_box_office,
     )
     from utils.charts import weekly_bo_chart, annual_bo_chart, ytd_pacing_chart
 
@@ -418,17 +419,11 @@ elif cfg["name"] == "Movie Theaters":
     lbl = cfg["macro_labels"]
 
     st.header("Box Office Dashboard")
-    st.caption("Live data from The Numbers · FRED pricing & employment data · Updated hourly")
+    st.caption("Live data from The Numbers · Updates daily · FRED pricing & employment data")
 
     # ── Sidebar ───────────────────────────────────────────────────────────
     with st.sidebar:
         st.header("Settings")
-        bo_lookback = st.selectbox(
-            "Box Office Lookback",
-            ["YTD", "1M", "3M", "6M", "52W", "1Y", "3Y"],
-            index=4,
-            help="Controls the weekly box office trend chart period",
-        )
         bo_compare_year = st.selectbox(
             "Compare current year to",
             [2025, 2024, 2023, 2019],
@@ -438,172 +433,214 @@ elif cfg["name"] == "Movie Theaters":
         start_year = st.slider("FRED History Start Year", 2010, 2022, 2015)
         start_date = f"{start_year}-01-01"
 
-    current_year = 2026
-
-    # ── Determine years needed based on lookback ─────────────────────────
-    lookback_years_map = {"YTD": [current_year], "1M": [current_year],
-                          "3M": [current_year], "6M": [current_year, current_year - 1],
-                          "52W": [current_year, current_year - 1],
-                          "1Y": [current_year, current_year - 1],
-                          "3Y": [current_year, current_year - 1, current_year - 2, current_year - 3]}
-    years_needed = set(lookback_years_map.get(bo_lookback, [current_year]))
-    years_needed.add(bo_compare_year)
-    years_needed.add(current_year)
-    years_needed.add(2025)  # Always fetch 2025 for detail table
+    current_year = pd.Timestamp.now().year
 
     # ── Fetch box office data ─────────────────────────────────────────────
-    with st.spinner("Fetching box office data…"):
+    with st.spinner("Fetching box office data (may be slow on first load)…"):
         weekly_chart_df = get_weekly_box_office()
-        all_weekly_data = {}
-        for yr in sorted(years_needed):
-            all_weekly_data[yr] = get_weekly_box_office_trend(yr)
-        weekly_trend_current = all_weekly_data.get(current_year, pd.DataFrame())
-        weekly_trend_prior = all_weekly_data.get(bo_compare_year, pd.DataFrame())
+        # 52-week rolling data (current + prior year combined)
+        weekly_52w = get_weekly_box_office_52w()
+        # Current + compare year for YoY
+        weekly_trend_current = get_weekly_box_office_trend(current_year)
+        weekly_trend_prior = get_weekly_box_office_trend(bo_compare_year)
+        # Also fetch 2025 if compare != 2025
+        weekly_trend_2025 = get_weekly_box_office_trend(2025) if bo_compare_year != 2025 else pd.DataFrame()
         annual_df = get_annual_box_office()
         release_df = get_release_schedule()
 
-    # ── Section 1: Box Office Snapshot (metric cards) ─────────────────────
-    c1, c2, c3, c4 = st.columns(4)
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 1: WTD / MTD / YTD SNAPSHOT + VS PRIOR YEAR
+    # ══════════════════════════════════════════════════════════════════════
 
-    if not weekly_trend_current.empty:
-        latest_wk = weekly_trend_current.iloc[-1]
-        prev_wk = weekly_trend_current.iloc[-2] if len(weekly_trend_current) > 1 else None
-        wk_date_label = latest_wk["weekend_date"].strftime("%b %d") if pd.notna(latest_wk.get("weekend_date")) else ""
+    today = pd.Timestamp.now().normalize()
+
+    # Combine all available weekly data into one frame for metric computation
+    _all_frames = []
+    for _df in [weekly_trend_current, weekly_trend_2025, weekly_trend_prior]:
+        if not _df.empty:
+            _all_frames.append(_df)
+    if _all_frames:
+        combined_weekly = pd.concat(_all_frames, ignore_index=True)
+        combined_weekly = combined_weekly.drop_duplicates(subset=["weekend_date"]).sort_values("weekend_date")
+    else:
+        combined_weekly = pd.DataFrame()
+
+    # Current year data
+    cy_data = combined_weekly[combined_weekly["weekend_date"].dt.year == current_year] if not combined_weekly.empty else pd.DataFrame()
+    # Prior year data
+    py_data = combined_weekly[combined_weekly["weekend_date"].dt.year == bo_compare_year] if not combined_weekly.empty else pd.DataFrame()
+
+    # Compute WTD, MTD, YTD
+    def _period_total(df, start_date):
+        if df.empty:
+            return 0
+        mask = df["weekend_date"] >= pd.Timestamp(start_date)
+        return df.loc[mask, "combined_gross"].sum()
+
+    # Current month start
+    month_start = today.replace(day=1)
+    # Current week start (Monday)
+    week_start = today - pd.Timedelta(days=today.weekday())
+    # Year start
+    year_start = pd.Timestamp(f"{current_year}-01-01")
+
+    wtd_cy = _period_total(cy_data, week_start)
+    mtd_cy = _period_total(cy_data, month_start)
+    ytd_cy = _period_total(cy_data, year_start)
+
+    # Same periods in prior year (shifted)
+    year_diff = current_year - bo_compare_year
+    py_week_start = week_start - pd.DateOffset(years=year_diff)
+    py_month_start = month_start - pd.DateOffset(years=year_diff)
+    py_year_start = pd.Timestamp(f"{bo_compare_year}-01-01")
+
+    # For PY YTD, match the same number of weeks
+    n_cy_weeks = len(cy_data)
+    ytd_py = py_data.head(n_cy_weeks)["combined_gross"].sum() if not py_data.empty else 0
+    mtd_py = _period_total(py_data, py_month_start)
+
+    # Latest weekend data
+    latest_wk_gross = None
+    latest_wk_date = ""
+    prev_wk_gross = None
+    no1_movie = ""
+    no1_gross = None
+
+    if not cy_data.empty:
+        latest = cy_data.iloc[-1]
+        latest_wk_gross = latest.get("combined_gross")
+        latest_wk_date = latest["weekend_date"].strftime("%b %d") if pd.notna(latest.get("weekend_date")) else ""
+        no1_movie = latest.get("no1_movie", "")
+        no1_gross = latest.get("no1_gross")
+        if len(cy_data) > 1:
+            prev_wk_gross = cy_data.iloc[-2].get("combined_gross")
+
+    # Display metric cards — Row 1
+    c1, c2, c3 = st.columns(3)
+
+    if latest_wk_gross:
+        wow_delta = None
+        if prev_wk_gross and prev_wk_gross > 0:
+            wow_pct = (latest_wk_gross / prev_wk_gross - 1) * 100
+            wow_delta = f"{wow_pct:+.1f}% WoW"
         c1.metric(
-            f"Weekend Box Office ({wk_date_label})" if wk_date_label else "Weekend Box Office",
-            f"${latest_wk['combined_gross']:,.0f}" if latest_wk["combined_gross"] else "N/A",
+            f"Weekend BO ({latest_wk_date})" if latest_wk_date else "Latest Weekend BO",
+            f"${latest_wk_gross:,.0f}",
+            delta=wow_delta, delta_color="normal",
         )
-        if prev_wk is not None and latest_wk["combined_gross"] and prev_wk["combined_gross"]:
-            pct_chg = (latest_wk["combined_gross"] / prev_wk["combined_gross"] - 1) * 100
-            c2.metric(
-                "vs. Prior Weekend",
-                f"{pct_chg:+.1f}%",
-                delta=f"{pct_chg:+.1f}%",
-                delta_color="normal",
-            )
-        # YTD total
-        ytd_total = weekly_trend_current["combined_gross"].sum()
+        add_export_metric("Weekend BO", f"${latest_wk_gross:,.0f}", wow_delta or "")
+
+    if mtd_cy > 0:
+        mtd_delta = None
+        if mtd_py > 0:
+            mtd_pct = (mtd_cy / mtd_py - 1) * 100
+            mtd_delta = f"{mtd_pct:+.1f}% vs {bo_compare_year}"
+        c2.metric(
+            f"MTD ({today.strftime('%B')})",
+            f"${mtd_cy:,.0f}",
+            delta=mtd_delta, delta_color="normal",
+        )
+        add_export_metric("MTD BO", f"${mtd_cy:,.0f}", mtd_delta or "")
+
+    if ytd_cy > 0:
         ytd_delta = None
-        if not weekly_trend_prior.empty:
-            n_weeks = len(weekly_trend_current)
-            prior_ytd = weekly_trend_prior.head(n_weeks)["combined_gross"].sum()
-            if prior_ytd > 0:
-                ytd_pct = (ytd_total / prior_ytd - 1) * 100
-                ytd_delta = f"{ytd_pct:+.1f}% vs {bo_compare_year}"
-        c3.metric("YTD Box Office", f"${ytd_total:,.0f}", delta=ytd_delta, delta_color="normal")
+        if ytd_py > 0:
+            ytd_pct = (ytd_cy / ytd_py - 1) * 100
+            ytd_delta = f"{ytd_pct:+.1f}% vs {bo_compare_year}"
+        c3.metric("YTD Box Office", f"${ytd_cy:,.0f}", delta=ytd_delta, delta_color="normal")
+        add_export_metric("YTD BO", f"${ytd_cy:,.0f}", ytd_delta or "")
+
+    # Row 2: Avg ticket price + #1 movie
+    c5, c6 = st.columns([1, 2])
 
     if not annual_df.empty:
         latest_year = annual_df.iloc[0]
         yr_label = int(latest_year["Year"]) if "Year" in latest_year.index else ""
         if latest_year.get("Avg Ticket Price"):
-            c4.metric(f"Avg Ticket Price ({yr_label})" if yr_label else "Avg Ticket Price",
+            c5.metric(f"Avg Ticket Price ({yr_label})" if yr_label else "Avg Ticket Price",
                       f"${latest_year['Avg Ticket Price']:.2f}")
 
-    # ── #1 Movie callout ──────────────────────────────────────────────────
-    if not weekly_trend_current.empty:
-        latest = weekly_trend_current.iloc[-1]
-        st.info(
-            f"**#1 Movie:** {latest['no1_movie']} — "
-            f"${latest['no1_gross']:,.0f} weekend gross"
-            if latest["no1_gross"] else f"**#1 Movie:** {latest['no1_movie']}"
-        )
+    if no1_movie:
+        gross_txt = f" — ${no1_gross:,.0f} weekend" if no1_gross else ""
+        c6.info(f"**#1 Movie:** {no1_movie}{gross_txt}")
 
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 2: WEEKLY BOX OFFICE TREND (with lookback filter)
+    # SECTION 2: 52-WEEK ROLLING BOX OFFICE TRACKER
     # ══════════════════════════════════════════════════════════════════════
-    st.subheader(f"Weekly Combined Weekend Box Office ({bo_lookback})")
+    st.subheader("Weekly Box Office — Last 52 Weeks")
 
-    # Build the combined weekly BO DataFrame for the selected lookback
-    def _build_lookback_df(lookback, all_data, current_yr):
-        """Combine weekly data across years for the chosen lookback window."""
-        today = pd.Timestamp.now().normalize()
-        frames = []
-        for yr in sorted(all_data.keys()):
-            df = all_data[yr]
-            if not df.empty:
-                frames.append(df)
-        if not frames:
-            return pd.DataFrame()
-        combined = pd.concat(frames, ignore_index=True).sort_values("weekend_date")
-        combined = combined.drop_duplicates(subset=["weekend_date"])
-
-        if lookback == "YTD":
-            start = pd.Timestamp(f"{current_yr}-01-01")
-        elif lookback == "1M":
-            start = today - pd.DateOffset(months=1)
-        elif lookback == "3M":
-            start = today - pd.DateOffset(months=3)
-        elif lookback == "6M":
-            start = today - pd.DateOffset(months=6)
-        elif lookback == "52W":
-            start = today - pd.DateOffset(weeks=52)
-        elif lookback == "1Y":
-            start = today - pd.DateOffset(years=1)
-        elif lookback == "3Y":
-            start = today - pd.DateOffset(years=3)
-        else:
-            start = pd.Timestamp(f"{current_yr}-01-01")
-
-        return combined[combined["weekend_date"] >= start].reset_index(drop=True)
-
-    lookback_df = _build_lookback_df(bo_lookback, all_weekly_data, current_year)
-
-    if not lookback_df.empty:
-        # Build the lookback chart
-        fig_lb = go.Figure()
-        fig_lb.add_trace(go.Bar(
-            x=lookback_df["weekend_date"],
-            y=lookback_df["combined_gross"],
-            marker_color="#1565C0",
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra></extra>",
+    if not weekly_52w.empty and "combined_gross" in weekly_52w.columns:
+        fig_52w = go.Figure()
+        fig_52w.add_trace(go.Bar(
+            x=weekly_52w["weekend_date"],
+            y=weekly_52w["combined_gross"],
+            marker_color=[
+                "#1565C0" if d.year == current_year else "#90CAF9"
+                for d in weekly_52w["weekend_date"]
+            ],
+            hovertemplate=(
+                "<b>%{x|%b %d, %Y}</b><br>"
+                "Weekend BO: $%{y:,.0f}<extra></extra>"
+            ),
             name="Weekend BO",
         ))
 
-        # Add comparison year overlay if applicable
-        if not weekly_trend_prior.empty and bo_lookback in ("YTD", "52W", "1Y"):
-            prior = weekly_trend_prior.copy()
-            if bo_lookback == "YTD":
-                n_weeks = len(lookback_df[lookback_df["weekend_date"].dt.year == current_year])
-                prior_slice = prior.head(n_weeks)
-            else:
-                prior_slice = prior
-            if not prior_slice.empty:
-                year_diff = current_year - bo_compare_year
-                prior_slice = prior_slice.copy()
-                prior_slice["weekend_date"] = prior_slice["weekend_date"] + pd.DateOffset(years=year_diff)
-                fig_lb.add_trace(go.Scatter(
-                    x=prior_slice["weekend_date"],
-                    y=prior_slice["combined_gross"],
-                    name=f"{bo_compare_year}",
-                    line=dict(color="#e67e22", width=2.5, dash="dot"),
-                    hovertemplate=f"{bo_compare_year} " + "%{x|%b %d}: $%{y:,.0f}<extra></extra>",
-                ))
+        # 4-week moving average
+        if len(weekly_52w) >= 4:
+            ma4 = weekly_52w["combined_gross"].rolling(4).mean()
+            fig_52w.add_trace(go.Scatter(
+                x=weekly_52w["weekend_date"],
+                y=ma4,
+                name="4-Wk Avg",
+                line=dict(color="#e67e22", width=2.5),
+                hovertemplate="4-Wk Avg: $%{y:,.0f}<extra></extra>",
+            ))
 
-        fig_lb.update_layout(
-            **_base_layout(title=f"Weekly Weekend BO — {bo_lookback}"),
+        fig_52w.update_layout(
+            **_base_layout(title="Weekly Combined Weekend Box Office — Last 52 Weeks"),
             yaxis_title="Weekend BO ($)",
             yaxis_tickformat="$,.0s",
-            height=440,
+            height=460,
             legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
         )
-        st.plotly_chart(fig_lb, width="stretch")
+        st.plotly_chart(fig_52w, width="stretch")
+        add_export_figure("52-Week Box Office", fig_52w)
+
+        total_52w = weekly_52w["combined_gross"].sum()
+        avg_52w = weekly_52w["combined_gross"].mean()
+        max_wk = weekly_52w.loc[weekly_52w["combined_gross"].idxmax()]
+        max_movie = max_wk.get("no1_movie", "")
+        max_date = max_wk["weekend_date"].strftime("%b %d, %Y") if pd.notna(max_wk.get("weekend_date")) else ""
         st.caption(
-            f"Showing {len(lookback_df)} weekends · "
-            f"Total: ${lookback_df['combined_gross'].sum():,.0f} · "
-            f"Avg: ${lookback_df['combined_gross'].mean():,.0f}/weekend"
+            f"{len(weekly_52w)} weekends | "
+            f"Total: ${total_52w:,.0f} | "
+            f"Avg: ${avg_52w:,.0f}/wk | "
+            f"Best: ${max_wk['combined_gross']:,.0f} ({max_date}, {max_movie})"
         )
+
+        # Full 52-week data table
+        with st.expander("52-Week Data Table"):
+            tbl_52w = weekly_52w[["weekend_date", "no1_movie", "combined_gross"]].copy()
+            tbl_52w = tbl_52w.sort_values("weekend_date", ascending=False)
+            tbl_52w.columns = ["Weekend", "#1 Movie", "Combined BO"]
+            tbl_52w["Weekend"] = tbl_52w["Weekend"].dt.strftime("%b %d, %Y")
+            tbl_52w["Combined BO"] = tbl_52w["Combined BO"].apply(
+                lambda v: f"${v:,.0f}" if pd.notna(v) else "N/A"
+            )
+            st.dataframe(tbl_52w, width="stretch", height=500, hide_index=True)
+            add_export_table("52-Week Box Office", tbl_52w)
     else:
-        st.warning("Weekly box office trend data unavailable.")
+        st.warning(
+            "Weekly box office data unavailable. The Numbers may be temporarily slow. "
+            "Data will auto-retry on next page load."
+        )
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 2B: WEEKLY BOX OFFICE — YoY TRACKING + #1 MOVIE
     # ══════════════════════════════════════════════════════════════════════
     st.subheader("Weekly Box Office — YoY Tracking")
-
-    # Get 2025 data for the detail table (always included)
-    weekly_trend_2025 = all_weekly_data.get(2025, pd.DataFrame())
 
     if not weekly_trend_current.empty and not weekly_trend_prior.empty:
         # Build week-by-week comparison
