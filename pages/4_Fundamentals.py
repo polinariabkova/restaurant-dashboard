@@ -14,6 +14,10 @@ from utils.industry_selector import render_industry_selector
 from utils.data_fetchers import get_financials, get_info, get_valuation_table
 from utils.charts import revenue_bar_chart, margin_chart, _base_layout
 from utils.style import inject_css
+from utils.export import (
+    reset_export_state, add_export_figure, add_export_table,
+    add_export_metric, render_export_sidebar,
+)
 
 st.set_page_config(page_title="Fundamentals", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "assets", "arini_logo.svg"))
@@ -23,6 +27,7 @@ inject_css()
 cfg = render_industry_selector()
 
 st.title("Fundamentals")
+reset_export_state()
 COMPANIES = cfg["companies"]
 TICKERS = list(COMPANIES.keys())
 SEGMENTS = cfg["segments"]
@@ -220,3 +225,6 @@ st.caption(
     "**Data note:** Yahoo Finance data may lag by 1-2 quarters. "
     "Revenue/margins from yfinance `.info` are TTM (trailing twelve months)."
 )
+
+# ── Export sidebar ─────────────────────────────────────────────────────
+render_export_sidebar(cfg["name"])

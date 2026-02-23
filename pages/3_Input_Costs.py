@@ -16,6 +16,10 @@ from utils.data_fetchers import (
 )
 from utils.charts import commodity_normalized_chart, commodity_detail_chart
 from utils.style import inject_css
+from utils.export import (
+    reset_export_state, add_export_figure, add_export_table,
+    add_export_metric, render_export_sidebar,
+)
 
 st.set_page_config(page_title="Input Costs", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "assets", "arini_logo.svg"))
@@ -25,6 +29,7 @@ inject_css()
 cfg = render_industry_selector()
 
 st.title("Input Costs")
+reset_export_state()
 COMMODITY_FUTURES = cfg["commodity_futures"]
 COMMODITY_UNITS = cfg["commodity_units"]
 COMMODITY_META = cfg["commodity_meta"]
@@ -103,18 +108,18 @@ if not meat_df.empty:
         if col not in all_prices.columns:
             all_prices[col] = meat_df[col]
 
-# ── Fetch FRED pricing series for industries without commodity futures ─────
+# ── Fetch FRED pricing series (industry pricing indices) ──────────────────
 fred_pricing_series = {}
-if not has_commodities or not futures_map:
-    # Fetch industry-specific FRED pricing series
-    for key in ["cpi_industry_1", "cpi_industry_2", "industry_kpi"]:
-        series_id = fs.get(key)
-        if series_id and fred_key_available():
-            lbl_key = key.replace("cpi_", "").replace("industry_", "")
-            label = cfg["macro_labels"].get(f"cpi_{lbl_key}_label") or cfg["macro_labels"].get(f"{lbl_key}_label") or key
-            s = get_fred_series(series_id, start=f"{2015}-01-01")
-            if not s.empty:
-                fred_pricing_series[label] = s
+fred_pricing_raw = {}  # keyed by config key (e.g. "industry_kpi")
+for key in ["cpi_industry_1", "cpi_industry_2", "industry_kpi"]:
+    series_id = fs.get(key)
+    if series_id and fred_key_available():
+        lbl_key = key.replace("cpi_", "").replace("industry_", "")
+        label = cfg["macro_labels"].get(f"cpi_{lbl_key}_label") or cfg["macro_labels"].get(f"{lbl_key}_label") or key
+        s = get_fred_series(series_id, start="2015-01-01")
+        if not s.empty:
+            fred_pricing_series[label] = s
+            fred_pricing_raw[key] = s
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN CONTENT
@@ -324,6 +329,129 @@ if not has_any_content:
     else:
         st.info("No input cost data available for this industry. Check sidebar settings or FRED API key.")
 
+# ── Industry Pricing Indices (YoY % charts — moved from KPIs page for P&P) ──
+import plotly.graph_objects as go
+from utils.charts import _base_layout
+
+lbl = cfg.get("macro_labels", {})
+
+if fred_pricing_raw:
+    has_any_content = True
+    st.divider()
+    st.header(lbl.get("industry_section_title", "Industry Pricing"))
+
+    def _yoy(s):
+        return s.pct_change(12).dropna() * 100
+
+    # ── Industry KPI series (e.g. PPI Corrugated Shipping Containers) ──
+    if "industry_kpi" in fred_pricing_raw:
+        kpi_label = lbl.get("industry_kpi_label", "Industry KPI Index")
+        kpi_s = fred_pricing_raw["industry_kpi"]
+        yoy_kpi = _yoy(kpi_s)
+
+        st.subheader(lbl.get("industry_kpi_chart_title", f"{kpi_label} (YoY %)"))
+        if lbl.get("industry_kpi_caption"):
+            st.caption(lbl["industry_kpi_caption"])
+
+        fig_kpi = go.Figure()
+        fig_kpi.add_trace(go.Scatter(
+            x=yoy_kpi.index, y=yoy_kpi.values,
+            name=kpi_label,
+            line=dict(color="#C0392B", width=2.5),
+            fill="tozeroy",
+            fillcolor="rgba(192, 57, 43, 0.1)",
+        ))
+        fig_kpi.add_hline(y=0, line_color="rgba(0,0,0,0.3)", line_width=1)
+        fig_kpi.update_layout(
+            **_base_layout(title=lbl.get("industry_kpi_chart_title", f"{kpi_label} (YoY %)")),
+            yaxis_title="YoY %", height=380,
+        )
+        st.plotly_chart(fig_kpi, width="stretch")
+
+        with st.expander(f"Show {kpi_label} — Absolute Index Level"):
+            fig_kpi_abs = go.Figure(go.Scatter(
+                x=kpi_s.index, y=kpi_s.values,
+                name=kpi_label,
+                line=dict(color="#C0392B", width=2),
+            ))
+            fig_kpi_abs.update_layout(
+                **_base_layout(title=f"{kpi_label} — Index Level"),
+                yaxis_title="Index", height=340,
+            )
+            st.plotly_chart(fig_kpi_abs, width="stretch")
+
+    # ── Dual pricing series (e.g. PPI Corrugated Paperboard vs Wood Pulp) ──
+    if "cpi_industry_1" in fred_pricing_raw:
+        s1 = fred_pricing_raw["cpi_industry_1"]
+        s2 = fred_pricing_raw.get("cpi_industry_2", pd.Series(dtype=float))
+        yoy_1 = _yoy(s1)
+        label_1 = lbl.get("cpi_label_1", "Series 1")
+        label_2 = lbl.get("cpi_label_2", "Series 2")
+
+        st.subheader(lbl.get("cpi_chart_title", "Industry Pricing (YoY %)"))
+        st.caption(lbl.get("cpi_chart_caption", ""))
+
+        fig_cpi = go.Figure()
+        fig_cpi.add_trace(go.Scatter(
+            x=yoy_1.index, y=yoy_1.values,
+            name=label_1,
+            line=dict(color="#e67e22", width=2.5),
+        ))
+
+        if s2 is not None and not s2.empty and label_2:
+            yoy_2 = _yoy(s2)
+            fig_cpi.add_trace(go.Scatter(
+                x=yoy_2.index, y=yoy_2.values,
+                name=label_2,
+                line=dict(color="#3498db", width=2.5),
+            ))
+
+        fig_cpi.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
+        fig_cpi.update_layout(
+            **_base_layout(title=lbl.get("cpi_chart_title", "Industry Pricing (YoY %)")),
+            yaxis_title="YoY %", height=400,
+            legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+        )
+        st.plotly_chart(fig_cpi, width="stretch")
+
+        # Absolute index levels
+        with st.expander("Show Index Level (Absolute)"):
+            fig_abs = go.Figure()
+            fig_abs.add_trace(go.Scatter(
+                x=s1.index, y=s1.values,
+                name=label_1, line=dict(color="#e67e22", width=2),
+            ))
+            if s2 is not None and not s2.empty and label_2:
+                fig_abs.add_trace(go.Scatter(
+                    x=s2.index, y=s2.values,
+                    name=label_2, line=dict(color="#3498db", width=2),
+                ))
+            fig_abs.update_layout(
+                **_base_layout(title="Index Level"),
+                yaxis_title="Index", height=360,
+                legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+            )
+            st.plotly_chart(fig_abs, width="stretch")
+
+        # Spread chart (if two series)
+        if s2 is not None and not s2.empty and label_2:
+            yoy_s1 = _yoy(s1)
+            yoy_s2 = _yoy(s2)
+            spread = (yoy_s1 - yoy_s2).dropna()
+            if not spread.empty:
+                st.caption(f"**Spread:** {label_1} minus {label_2} (YoY pp)")
+                fig_spread = go.Figure(go.Bar(
+                    x=spread.index, y=spread.values,
+                    marker_color=["#e74c3c" if v > 0 else "#2ecc71" for v in spread.values],
+                    hovertemplate="%{x|%b %Y}: %{y:.2f}pp<extra></extra>",
+                ))
+                fig_spread.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
+                fig_spread.update_layout(
+                    **_base_layout(title=f"{label_1} \u2212 {label_2} (YoY pp Spread)"),
+                    yaxis_title="Percentage Points", height=320,
+                )
+                st.plotly_chart(fig_spread, width="stretch")
+
 st.divider()
 st.caption(
     f"**{cfg['name']}** — "
@@ -331,3 +459,6 @@ st.caption(
     "Pricing indices via FRED. "
     "Red = rising costs (pressure) · Green = falling costs (relief)."
 )
+
+# ── Export sidebar ─────────────────────────────────────────────────────
+render_export_sidebar(cfg["name"])

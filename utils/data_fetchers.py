@@ -29,7 +29,7 @@ def _get_fred():
 
 # ── Stock / price data ─────────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_prices(tickers: list[str], period: str = "1y") -> pd.DataFrame:
     """
     Return daily adjusted close prices for a list of tickers.
@@ -48,7 +48,7 @@ def get_prices(tickers: list[str], period: str = "1y") -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_ohlcv(ticker: str, period: str = "1y") -> pd.DataFrame:
     """Return OHLCV data for a single ticker."""
     try:
@@ -62,7 +62,7 @@ def get_ohlcv(ticker: str, period: str = "1y") -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_returns_table(tickers: list[str]) -> pd.DataFrame:
     """
     Build a returns table with periods: 1D, 1W, 1M, 3M, YTD, 1Y.
@@ -113,7 +113,7 @@ def get_returns_table(tickers: list[str]) -> pd.DataFrame:
 
 # ── Commodity futures ──────────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_commodity_prices(futures_map: dict, period: str = "2y") -> pd.DataFrame:
     """
     Fetch commodity futures prices.
@@ -172,7 +172,7 @@ def get_fred_beef_chicken(start: str = "2015-01-01") -> pd.DataFrame:
     return df.dropna(how="all")
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_usda_beef_chicken(lookback_years: int = 5) -> pd.DataFrame:
     """
     Fetch beef and chicken prices from USDA AMS Market News (no API key required).
@@ -341,7 +341,7 @@ def _parse_int(text: str) -> int | None:
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_weekly_box_office() -> pd.DataFrame:
     """
     Scrape the current weekly (Fri-Thu) box office chart from The Numbers.
@@ -388,7 +388,7 @@ def get_weekly_box_office() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_weekly_box_office_trend(year: int) -> pd.DataFrame:
     """
     Scrape weekly combined weekend BO totals from The Numbers /market/{year}/summary.
@@ -784,7 +784,7 @@ def get_gambling_revenue_fred(start: str = "2015-01-01") -> pd.Series:
     return get_fred_series("REV7132TAXABL144QNSA", start=start)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_state_igaming_revenue() -> pd.DataFrame:
     """
     Scrape state-by-state iGaming/sports betting revenue from PlayUSA.
@@ -834,7 +834,7 @@ def get_state_igaming_revenue() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_sports_betting_by_state() -> pd.DataFrame:
     """
     Scrape state-by-state sports betting handle, revenue, and hold %
@@ -969,3 +969,257 @@ def get_gaming_kpi_reference() -> dict:
             "segments": "Digital/iGaming",
         },
     }
+
+
+# ── Movie franchise box office data ───────────────────────────────────
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_franchise_box_office() -> pd.DataFrame:
+    """
+    Scrape top movie franchises from the-numbers.com/movies/franchises.
+    Returns DataFrame with franchise name, movie count, domestic BO, worldwide BO, etc.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+    }
+    try:
+        r = requests.get(
+            "https://www.the-numbers.com/movies/franchises",
+            headers=_HEADERS, timeout=20,
+        )
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "lxml")
+        tables = soup.find_all("table")
+        if not tables:
+            return pd.DataFrame()
+
+        main_table = max(tables, key=lambda t: len(t.find_all("tr")))
+        rows_data = []
+        for tr in main_table.find_all("tr")[1:]:
+            cells = tr.find_all(["td", "th"])
+            if len(cells) < 4:
+                continue
+            # Extract franchise name and link
+            link_tag = cells[0].find("a")
+            name = link_tag.text.strip() if link_tag else cells[0].text.strip()
+            slug = link_tag["href"].split("/")[-1] if link_tag and link_tag.get("href") else ""
+
+            row = {"Franchise": name, "Slug": slug}
+            texts = [c.text.strip() for c in cells]
+
+            # Parse columns: Franchise, Movies, Domestic BO, Infl Adj, Worldwide BO, First, Last, Years
+            if len(texts) >= 2:
+                row["Movies"] = _parse_int(texts[1]) if len(texts) > 1 else None
+            if len(texts) >= 3:
+                row["Domestic BO"] = _parse_money(texts[2]) if len(texts) > 2 else None
+            if len(texts) >= 5:
+                row["Worldwide BO"] = _parse_money(texts[4]) if len(texts) > 4 else None
+            if len(texts) >= 6:
+                row["First Year"] = _parse_int(texts[5]) if len(texts) > 5 else None
+            if len(texts) >= 7:
+                row["Last Year"] = _parse_int(texts[6]) if len(texts) > 6 else None
+
+            if name and row.get("Domestic BO"):
+                rows_data.append(row)
+
+        df = pd.DataFrame(rows_data)
+        if not df.empty and "Domestic BO" in df.columns:
+            df = df.sort_values("Domestic BO", ascending=False).head(50).reset_index(drop=True)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+# ── Containerboard price increase tracker (RSS) ──────────────────────
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_containerboard_price_increases() -> pd.DataFrame:
+    """
+    Scrape RSS feeds for containerboard / corrugated price increase announcements.
+    Returns DataFrame with date, headline, source.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    _FEEDS = {
+        "BusinessWire": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJbWJg",
+        "PR Newswire": "https://www.prnewswire.com/rss/news-releases-list.rss",
+        "Reuters Business": "https://feeds.reuters.com/reuters/businessNews",
+    }
+    _KEYWORDS = [
+        "containerboard", "price increase", "linerboard",
+        "corrugating medium", "corrugated", "price hike",
+        "packaging price", "box price",
+    ]
+
+    rows = []
+    for source, url in _FEEDS.items():
+        try:
+            r = requests.get(url, timeout=15,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "xml")
+            items = soup.find_all("item")[:100]  # scan up to 100 items per feed
+            for item in items:
+                title_text = (item.title.text if item.title else "").strip()
+                desc_text = (item.description.text if item.description else "").strip()
+                combined = (title_text + " " + desc_text).lower()
+
+                if any(kw in combined for kw in _KEYWORDS):
+                    pub_date = item.pubDate.text.strip() if item.pubDate else ""
+                    link = item.link.text.strip() if item.link else ""
+                    rows.append({
+                        "Date": pub_date,
+                        "Headline": title_text[:200],
+                        "Source": source,
+                        "Link": link,
+                    })
+        except Exception:
+            continue
+
+    df = pd.DataFrame(rows)
+    if not df.empty and "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True)
+        df = df.dropna(subset=["Date"]).sort_values("Date", ascending=False)
+    return df
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_pp_curtailment_news() -> pd.DataFrame:
+    """
+    Scrape RSS feeds for P&P downtime / curtailment announcements.
+    Returns DataFrame with date, headline, source.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    _FEEDS = {
+        "BusinessWire": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJbWJg",
+        "Reuters Business": "https://feeds.reuters.com/reuters/businessNews",
+    }
+    _KEYWORDS = [
+        "downtime", "curtailment", "maintenance outage", "capacity reduction",
+        "mill closure", "idled", "containerboard shutdown", "paper mill",
+        "pulp mill", "capacity curtail",
+    ]
+
+    rows = []
+    for source, url in _FEEDS.items():
+        try:
+            r = requests.get(url, timeout=15,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "xml")
+            items = soup.find_all("item")[:100]
+            for item in items:
+                title_text = (item.title.text if item.title else "").strip()
+                desc_text = (item.description.text if item.description else "").strip()
+                combined = (title_text + " " + desc_text).lower()
+
+                if any(kw in combined for kw in _KEYWORDS):
+                    pub_date = item.pubDate.text.strip() if item.pubDate else ""
+                    rows.append({
+                        "Date": pub_date,
+                        "Headline": title_text[:200],
+                        "Source": source,
+                    })
+        except Exception:
+            continue
+
+    df = pd.DataFrame(rows)
+    if not df.empty and "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True)
+        df = df.dropna(subset=["Date"]).sort_values("Date", ascending=False)
+    return df
+
+
+# ── Generic company quarterly financials (reusable for any industry) ──
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_company_quarterly_financials(tickers: list) -> pd.DataFrame:
+    """
+    Scrape quarterly financials from stockanalysis.com for any list of tickers.
+    Returns a long-format DataFrame with Ticker, Quarter, Revenue, EBITDA, EPS, etc.
+    Same pattern as get_gaming_company_financials but generalized.
+    """
+    import requests, re, json
+
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    all_rows = []
+    for ticker in tickers:
+        try:
+            url = f"https://www.stockanalysis.com/stocks/{ticker.lower()}/financials/?p=quarterly"
+            r = requests.get(url, headers=_HEADERS, timeout=20)
+            r.raise_for_status()
+            text = r.text
+
+            # Extract JSON from Svelte kit.start()
+            match = re.search(r'type="application/json"[^>]*>(.*?)</script>', text, re.DOTALL)
+            if not match:
+                continue
+            raw_json = match.group(1)
+            data = json.loads(raw_json)
+
+            # Navigate the nested structure
+            nodes = data
+            if isinstance(nodes, dict):
+                # Try common Svelte paths
+                for path_attempt in [
+                    lambda d: d.get("props", {}).get("pageProps", {}).get("data", {}),
+                    lambda d: d.get("data", [{}])[0] if isinstance(d.get("data"), list) else {},
+                ]:
+                    try:
+                        nodes = path_attempt(data)
+                        if nodes:
+                            break
+                    except (KeyError, IndexError, TypeError):
+                        continue
+
+            # Find the financials data array
+            fin_data = None
+            if isinstance(nodes, dict):
+                for key in ["data", "financials", "quarterlyData", "results"]:
+                    if key in nodes and isinstance(nodes[key], list):
+                        fin_data = nodes[key]
+                        break
+            if not fin_data:
+                continue
+
+            for row in fin_data[:12]:  # Last 12 quarters
+                if not isinstance(row, dict):
+                    continue
+                date_str = row.get("date") or row.get("period") or row.get("quarter")
+                if not date_str:
+                    continue
+                all_rows.append({
+                    "Ticker": ticker.upper(),
+                    "Quarter": pd.to_datetime(date_str, errors="coerce"),
+                    "Revenue": row.get("revenue"),
+                    "EBITDA": row.get("ebitda"),
+                    "Net Income": row.get("netIncome") or row.get("netincome"),
+                    "EPS": row.get("eps") or row.get("epsDiluted"),
+                    "EBITDA Margin": row.get("ebitdaMargin"),
+                    "Profit Margin": row.get("profitMargin") or row.get("netMargin"),
+                })
+        except Exception:
+            continue
+
+    df = pd.DataFrame(all_rows)
+    if not df.empty:
+        df = df.dropna(subset=["Quarter"]).sort_values(["Ticker", "Quarter"])
+    return df

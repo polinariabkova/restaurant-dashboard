@@ -13,6 +13,10 @@ from utils.industry_selector import render_industry_selector
 from utils.data_fetchers import get_prices, get_ohlcv, get_returns_table
 from utils.charts import normalized_price_chart, returns_heatmap, price_volume_chart
 from utils.style import inject_css
+from utils.export import (
+    reset_export_state, add_export_figure, add_export_table,
+    add_export_metric, render_export_sidebar,
+)
 
 st.set_page_config(page_title="Stock Performance", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "assets", "arini_logo.svg"))
@@ -22,6 +26,7 @@ inject_css()
 cfg = render_industry_selector()
 
 st.title("Stock Performance")
+reset_export_state()
 COMPANIES = cfg["companies"]
 TICKERS = list(COMPANIES.keys())
 SEGMENTS = cfg["segments"]
@@ -158,3 +163,6 @@ if not ohlcv.empty:
     ]
     for col, (label, val) in zip([c1, c2, c3, c4, c5], info_cols):
         col.metric(label, val)
+
+# ── Export sidebar ─────────────────────────────────────────────────────
+render_export_sidebar(cfg["name"])

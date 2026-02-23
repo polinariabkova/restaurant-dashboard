@@ -14,6 +14,10 @@ from utils.industry_selector import render_industry_selector
 from utils.data_fetchers import get_fred_series, fred_key_available
 from utils.charts import _base_layout
 from utils.style import inject_css
+from utils.export import (
+    reset_export_state, add_export_figure, add_export_table,
+    add_export_metric, render_export_sidebar,
+)
 
 st.set_page_config(page_title="Industry KPIs", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "assets", "arini_logo.svg"))
@@ -23,6 +27,7 @@ inject_css()
 cfg = render_industry_selector()
 
 st.title("Industry KPIs")
+reset_export_state()
 
 if cfg["has_sss"]:
     # ═══════════════════════════════════════════════════════════════════════
@@ -197,6 +202,200 @@ if cfg["has_sss"]:
         )
 
     st.divider()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # RESTAURANT — QSR vs CASUAL DINING SSS SPREAD
+    # ═══════════════════════════════════════════════════════════════════════
+    st.subheader("QSR vs Casual Dining SSS Spread")
+    st.caption(
+        "Average SSS for Quick Service (QSR) minus Casual Dining — a proxy for drive-thru/convenience demand. "
+        "Positive spread = QSR outperforming, suggesting drive-thru demand strength."
+    )
+
+    # Compute segment averages by quarter
+    qsr_tickers = SEGMENTS.get("Quick Service (QSR)", [])
+    casual_tickers = SEGMENTS.get("Casual Dining", [])
+
+    if qsr_tickers and casual_tickers:
+        spread_rows = []
+        for q in quarters:
+            qsr_vals = [
+                next((d["sss"] for d in SSS_DATA.get(t, []) if d["quarter"] == q), None)
+                for t in qsr_tickers
+            ]
+            casual_vals = [
+                next((d["sss"] for d in SSS_DATA.get(t, []) if d["quarter"] == q), None)
+                for t in casual_tickers
+            ]
+            qsr_avg = np.nanmean([v for v in qsr_vals if v is not None]) if any(v is not None for v in qsr_vals) else None
+            casual_avg = np.nanmean([v for v in casual_vals if v is not None]) if any(v is not None for v in casual_vals) else None
+
+            if qsr_avg is not None and casual_avg is not None:
+                spread_rows.append({
+                    "Quarter": q,
+                    "QSR Avg SSS": round(qsr_avg, 1),
+                    "Casual Avg SSS": round(casual_avg, 1),
+                    "Spread": round(qsr_avg - casual_avg, 1),
+                })
+
+        if spread_rows:
+            spread_df = pd.DataFrame(spread_rows)
+
+            fig_spread = go.Figure()
+            fig_spread.add_trace(go.Bar(
+                x=spread_df["Quarter"],
+                y=spread_df["Spread"],
+                name="QSR − Casual Spread",
+                marker_color=[
+                    "#2ecc71" if v >= 0 else "#e74c3c" for v in spread_df["Spread"]
+                ],
+                hovertemplate="%{x}: %{y:.1f}pp<extra></extra>",
+            ))
+            fig_spread.add_trace(go.Scatter(
+                x=spread_df["Quarter"], y=spread_df["QSR Avg SSS"],
+                name="QSR Avg SSS", mode="lines+markers",
+                line=dict(color="#e67e22", width=2),
+            ))
+            fig_spread.add_trace(go.Scatter(
+                x=spread_df["Quarter"], y=spread_df["Casual Avg SSS"],
+                name="Casual Avg SSS", mode="lines+markers",
+                line=dict(color="#3498db", width=2),
+            ))
+            fig_spread.add_hline(y=0, line_color="rgba(0,0,0,0.3)", line_width=1)
+            fig_spread.update_layout(
+                **_base_layout(title="QSR vs Casual Dining SSS Spread (pp)"),
+                yaxis_title="SSS (%)", height=420,
+                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+                barmode="relative",
+            )
+            st.plotly_chart(fig_spread, width="stretch")
+            add_export_figure("QSR vs Casual SSS Spread", fig_spread)
+
+            with st.expander("Spread Data"):
+                st.dataframe(spread_df.set_index("Quarter"), width="stretch")
+                add_export_table("SSS Spread Data", spread_df.set_index("Quarter"))
+        else:
+            st.info("Insufficient data to compute QSR vs Casual spread.")
+    else:
+        st.info("QSR and Casual Dining segments not available for spread calculation.")
+
+    st.divider()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # RESTAURANT — UNIT GROWTH TRACKER
+    # ═══════════════════════════════════════════════════════════════════════
+    st.subheader("Restaurant Unit Growth")
+    st.caption(
+        "Quarterly net unit openings/closures by chain — key driver of revenue growth beyond SSS. "
+        "Data sourced from company earnings reports (curated)."
+    )
+
+    # Curated quarterly unit counts from recent 10-Q/10-K filings
+    # Format: ticker -> list of {quarter, units}
+    UNIT_COUNTS = {
+        "MCD": [
+            {"quarter": "Q3 2024", "units": 41822}, {"quarter": "Q2 2024", "units": 41596},
+            {"quarter": "Q1 2024", "units": 41411}, {"quarter": "Q4 2023", "units": 41198},
+            {"quarter": "Q3 2023", "units": 40714}, {"quarter": "Q2 2023", "units": 40457},
+        ],
+        "SBUX": [
+            {"quarter": "Q3 2024", "units": 39477}, {"quarter": "Q2 2024", "units": 39038},
+            {"quarter": "Q1 2024", "units": 38587}, {"quarter": "Q4 2023", "units": 38038},
+            {"quarter": "Q3 2023", "units": 37222}, {"quarter": "Q2 2023", "units": 36634},
+        ],
+        "CMG": [
+            {"quarter": "Q3 2024", "units": 3615}, {"quarter": "Q2 2024", "units": 3530},
+            {"quarter": "Q1 2024", "units": 3479}, {"quarter": "Q4 2023", "units": 3437},
+            {"quarter": "Q3 2023", "units": 3370}, {"quarter": "Q2 2023", "units": 3317},
+        ],
+        "YUM": [
+            {"quarter": "Q3 2024", "units": 59652}, {"quarter": "Q2 2024", "units": 59290},
+            {"quarter": "Q1 2024", "units": 58838}, {"quarter": "Q4 2023", "units": 58275},
+            {"quarter": "Q3 2023", "units": 57221}, {"quarter": "Q2 2023", "units": 56617},
+        ],
+        "DPZ": [
+            {"quarter": "Q3 2024", "units": 20879}, {"quarter": "Q2 2024", "units": 20713},
+            {"quarter": "Q1 2024", "units": 20561}, {"quarter": "Q4 2023", "units": 20349},
+            {"quarter": "Q3 2023", "units": 20117}, {"quarter": "Q2 2023", "units": 19906},
+        ],
+        "WEN": [
+            {"quarter": "Q3 2024", "units": 7165}, {"quarter": "Q2 2024", "units": 7142},
+            {"quarter": "Q1 2024", "units": 7120}, {"quarter": "Q4 2023", "units": 7095},
+            {"quarter": "Q3 2023", "units": 7067}, {"quarter": "Q2 2023", "units": 7050},
+        ],
+        "DRI": [
+            {"quarter": "Q3 2024", "units": 2031}, {"quarter": "Q2 2024", "units": 2013},
+            {"quarter": "Q1 2024", "units": 1998}, {"quarter": "Q4 2023", "units": 1985},
+            {"quarter": "Q3 2023", "units": 1963}, {"quarter": "Q2 2023", "units": 1949},
+        ],
+        "SHAK": [
+            {"quarter": "Q3 2024", "units": 552}, {"quarter": "Q2 2024", "units": 530},
+            {"quarter": "Q1 2024", "units": 510}, {"quarter": "Q4 2023", "units": 495},
+            {"quarter": "Q3 2023", "units": 474}, {"quarter": "Q2 2023", "units": 453},
+        ],
+    }
+
+    if UNIT_COUNTS:
+        # Build net growth DataFrame
+        growth_rows = []
+        for tkr, data in UNIT_COUNTS.items():
+            sorted_data = sorted(data, key=lambda d: d["quarter"])
+            for i in range(1, len(sorted_data)):
+                net_change = sorted_data[i]["units"] - sorted_data[i-1]["units"]
+                growth_rows.append({
+                    "Ticker": tkr,
+                    "Company": COMPANIES.get(tkr, {}).get("name", tkr),
+                    "Quarter": sorted_data[i]["quarter"],
+                    "Total Units": sorted_data[i]["units"],
+                    "Net New Units": net_change,
+                })
+
+        if growth_rows:
+            growth_df = pd.DataFrame(growth_rows)
+
+            # Net new units grouped bar
+            fig_growth = go.Figure()
+            growth_colors = ["#e67e22", "#3498db", "#2ecc71", "#e74c3c", "#9b59b6",
+                             "#1abc9c", "#f39c12", "#8e44ad"]
+            for i, tkr in enumerate(UNIT_COUNTS.keys()):
+                tkr_data = growth_df[growth_df["Ticker"] == tkr]
+                fig_growth.add_trace(go.Bar(
+                    x=tkr_data["Quarter"],
+                    y=tkr_data["Net New Units"],
+                    name=tkr,
+                    marker_color=growth_colors[i % len(growth_colors)],
+                    hovertemplate=f"<b>{tkr}</b><br>" + "%{x}: %{y:+,d} units<extra></extra>",
+                ))
+            fig_growth.update_layout(
+                **_base_layout(title="Net New Restaurant Units by Quarter"),
+                barmode="group",
+                yaxis_title="Net New Units",
+                height=440,
+                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+            )
+            st.plotly_chart(fig_growth, width="stretch")
+            add_export_figure("Net New Restaurant Units", fig_growth)
+
+            # Latest unit count table
+            with st.expander("Current Unit Counts"):
+                latest_units = []
+                for tkr, data in UNIT_COUNTS.items():
+                    latest = max(data, key=lambda d: d["quarter"])
+                    earliest = min(data, key=lambda d: d["quarter"])
+                    yoy_change = latest["units"] - earliest["units"]
+                    latest_units.append({
+                        "Ticker": tkr,
+                        "Company": COMPANIES.get(tkr, {}).get("name", tkr),
+                        "Latest Units": f"{latest['units']:,}",
+                        "Quarter": latest["quarter"],
+                        "Net Change (Period)": f"{yoy_change:+,}",
+                        "Growth %": f"{(yoy_change/earliest['units']*100):.1f}%",
+                    })
+                units_df = pd.DataFrame(latest_units).set_index("Ticker")
+                st.dataframe(units_df, width="stretch")
+                add_export_table("Restaurant Unit Counts", units_df)
+
+    st.divider()
     st.caption(
         f"**SSS data last updated:** {SSS_LAST_UPDATED} earnings cycle  |  "
         f"**Next manual update:** {SSS_NEXT_UPDATE}  |  "
@@ -210,7 +409,7 @@ elif cfg["name"] == "Movie Theaters":
     from utils.data_fetchers import (
         get_weekly_box_office, get_weekly_box_office_trend,
         get_annual_box_office, get_release_schedule,
-        get_distributor_share_multi_year,
+        get_distributor_share_multi_year, get_franchise_box_office,
     )
     from utils.charts import weekly_bo_chart, annual_bo_chart, ytd_pacing_chart
 
@@ -750,7 +949,210 @@ elif cfg["name"] == "Movie Theaters":
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 7: CPI MOVIE ADMISSIONS + EMPLOYMENT (FRED)
+    # SECTION 7: FRANCHISE TRACKER
+    # ══════════════════════════════════════════════════════════════════════
+    st.subheader("Franchise Box Office Tracker")
+    st.caption("All-time top franchises by domestic box office — data from The Numbers")
+
+    with st.spinner("Fetching franchise data…"):
+        franchise_df = get_franchise_box_office()
+
+    if not franchise_df.empty and "Domestic BO" in franchise_df.columns:
+        top_n = st.slider("Top N Franchises", 10, 40, 20, key="franchise_n")
+        top_fran = franchise_df.head(top_n).copy()
+        top_fran = top_fran.sort_values("Domestic BO", ascending=True)
+
+        # Determine active vs dormant (last release within 3 years)
+        current_yr = pd.Timestamp.now().year
+        if "Last Year" in top_fran.columns:
+            top_fran["Status"] = top_fran["Last Year"].apply(
+                lambda y: "Active" if pd.notna(y) and y >= current_yr - 3 else "Dormant"
+            )
+            colors = top_fran["Status"].map({"Active": "#2ecc71", "Dormant": "#95a5a6"}).tolist()
+        else:
+            colors = "#003087"
+
+        fig_fran = go.Figure(go.Bar(
+            y=top_fran["Franchise"],
+            x=top_fran["Domestic BO"],
+            orientation="h",
+            marker_color=colors,
+            hovertemplate="<b>%{y}</b><br>$%{x:,.0f}<extra></extra>",
+            text=[f"${v/1e9:.1f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
+                  for v in top_fran["Domestic BO"]],
+            textposition="outside",
+            textfont=dict(size=9),
+        ))
+        fig_fran.update_layout(
+            **_base_layout(title=f"Top {top_n} Movie Franchises — All-Time Domestic BO"),
+            xaxis_title="Domestic Box Office ($)",
+            xaxis_tickformat="$,.0s",
+            height=max(500, top_n * 28),
+        )
+        st.plotly_chart(fig_fran, width="stretch")
+        add_export_figure("Top Franchises - Domestic BO", fig_fran)
+
+        if "Last Year" in top_fran.columns:
+            st.caption("Green = active franchise (release within last 3 years) | Gray = dormant")
+
+        # Franchise comparison table
+        with st.expander("Franchise Comparison Table"):
+            table_fran = franchise_df.head(top_n).copy()
+            if "Domestic BO" in table_fran.columns:
+                table_fran["Avg BO per Movie"] = (
+                    table_fran["Domestic BO"] / table_fran["Movies"].replace(0, pd.NA)
+                ).round(0)
+            display_cols = [c for c in ["Franchise", "Movies", "Domestic BO", "Worldwide BO",
+                                         "Avg BO per Movie", "First Year", "Last Year"]
+                           if c in table_fran.columns]
+            st.dataframe(
+                table_fran[display_cols].style.format({
+                    "Domestic BO": lambda v: f"${v:,.0f}" if pd.notna(v) else "N/A",
+                    "Worldwide BO": lambda v: f"${v:,.0f}" if pd.notna(v) else "N/A",
+                    "Avg BO per Movie": lambda v: f"${v:,.0f}" if pd.notna(v) else "N/A",
+                }),
+                width="stretch", height=500,
+            )
+            add_export_table("Franchise Comparison", table_fran[display_cols])
+
+        # Sequels vs Originals analysis
+        if "Movies" in franchise_df.columns and "Domestic BO" in franchise_df.columns:
+            with st.expander("Franchise Share of Total Box Office"):
+                # Calculate total franchise BO and compare to annual BO
+                total_franchise_bo = franchise_df["Domestic BO"].sum()
+                try:
+                    annual_df = get_annual_box_office()
+                    if not annual_df.empty:
+                        total_cols = [c for c in annual_df.columns if "total" in c.lower() or "gross" in c.lower() or "box" in c.lower()]
+                        if total_cols:
+                            all_time_bo = annual_df[total_cols[0]].sum()
+                            franchise_share = (total_franchise_bo / all_time_bo * 100) if all_time_bo > 0 else 0
+                            st.metric(
+                                "Franchise Share of All-Time Domestic BO",
+                                f"{franchise_share:.1f}%",
+                            )
+                            st.caption(
+                                f"The top {len(franchise_df)} franchises account for "
+                                f"${total_franchise_bo/1e9:.1f}B of total domestic BO. "
+                                "Franchise films increasingly dominate the box office."
+                            )
+                except Exception:
+                    pass
+    else:
+        st.info("Franchise data not available.")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 7B: STREAMING WINDOW ANALYSIS
+    # ══════════════════════════════════════════════════════════════════════
+    st.subheader("Theatrical-to-Streaming Window Analysis")
+    st.caption("Days between theatrical release and streaming debut — curated dataset, last updated Feb 2026")
+
+    STREAMING_WINDOWS = [
+        {"title": "Avengers: Endgame", "studio": "Disney", "theatrical": "2019-04-26", "streaming": "2019-11-12", "window_days": 200, "domestic_bo": 858},
+        {"title": "Spider-Man: No Way Home", "studio": "Sony", "theatrical": "2021-12-17", "streaming": "2022-07-15", "window_days": 210, "domestic_bo": 805},
+        {"title": "Top Gun: Maverick", "studio": "Paramount", "theatrical": "2022-05-27", "streaming": "2022-12-22", "window_days": 209, "domestic_bo": 719},
+        {"title": "Barbie", "studio": "WBD", "theatrical": "2023-07-21", "streaming": "2023-09-12", "window_days": 53, "domestic_bo": 636},
+        {"title": "The Super Mario Bros.", "studio": "Universal", "theatrical": "2023-04-05", "streaming": "2023-08-03", "window_days": 120, "domestic_bo": 575},
+        {"title": "Inside Out 2", "studio": "Disney", "theatrical": "2024-06-14", "streaming": "2024-09-25", "window_days": 103, "domestic_bo": 653},
+        {"title": "Deadpool & Wolverine", "studio": "Disney", "theatrical": "2024-07-26", "streaming": "2024-10-01", "window_days": 67, "domestic_bo": 637},
+        {"title": "Oppenheimer", "studio": "Universal", "theatrical": "2023-07-21", "streaming": "2023-11-21", "window_days": 123, "domestic_bo": 326},
+        {"title": "Dune: Part Two", "studio": "WBD", "theatrical": "2024-03-01", "streaming": "2024-05-21", "window_days": 81, "domestic_bo": 282},
+        {"title": "Wicked", "studio": "Universal", "theatrical": "2024-11-22", "streaming": "2025-02-25", "window_days": 95, "domestic_bo": 467},
+        {"title": "Moana 2", "studio": "Disney", "theatrical": "2024-11-27", "streaming": "2025-03-19", "window_days": 112, "domestic_bo": 449},
+        {"title": "Guardians of Galaxy 3", "studio": "Disney", "theatrical": "2023-05-05", "streaming": "2023-08-02", "window_days": 89, "domestic_bo": 359},
+        {"title": "The Batman", "studio": "WBD", "theatrical": "2022-03-04", "streaming": "2022-04-19", "window_days": 46, "domestic_bo": 369},
+        {"title": "Black Panther: Wakanda", "studio": "Disney", "theatrical": "2022-11-11", "streaming": "2023-02-01", "window_days": 82, "domestic_bo": 181},
+        {"title": "Avatar: Way of Water", "studio": "Disney", "theatrical": "2022-12-16", "streaming": "2023-06-07", "window_days": 173, "domestic_bo": 684},
+        {"title": "Tenet", "studio": "WBD", "theatrical": "2020-09-03", "streaming": "2020-12-15", "window_days": 103, "domestic_bo": 58},
+        {"title": "No Time to Die", "studio": "Universal", "theatrical": "2021-10-08", "streaming": "2021-12-20", "window_days": 73, "domestic_bo": 161},
+        {"title": "Godzilla x Kong", "studio": "WBD", "theatrical": "2024-03-29", "streaming": "2024-06-11", "window_days": 74, "domestic_bo": 196},
+        {"title": "Despicable Me 4", "studio": "Universal", "theatrical": "2024-07-03", "streaming": "2024-09-24", "window_days": 83, "domestic_bo": 361},
+        {"title": "Kingdom of Planet of Apes", "studio": "Disney", "theatrical": "2024-05-10", "streaming": "2024-08-02", "window_days": 84, "domestic_bo": 172},
+        {"title": "Beetlejuice Beetlejuice", "studio": "WBD", "theatrical": "2024-09-06", "streaming": "2024-11-06", "window_days": 61, "domestic_bo": 294},
+        {"title": "Wonka", "studio": "WBD", "theatrical": "2023-12-15", "streaming": "2024-02-27", "window_days": 74, "domestic_bo": 218},
+        {"title": "The Wild Robot", "studio": "Universal", "theatrical": "2024-09-27", "streaming": "2024-12-03", "window_days": 67, "domestic_bo": 144},
+    ]
+
+    sw_df = pd.DataFrame(STREAMING_WINDOWS)
+    sw_df["theatrical"] = pd.to_datetime(sw_df["theatrical"])
+    sw_df = sw_df.sort_values("theatrical")
+
+    # Scatter: window days over time, colored by studio
+    studio_colors = {
+        "Disney": "#003087", "WBD": "#7B2D8E", "Universal": "#e67e22",
+        "Sony": "#e74c3c", "Paramount": "#1ABC9C", "Lionsgate": "#F39C12",
+    }
+
+    fig_sw = go.Figure()
+    for studio in sw_df["studio"].unique():
+        sdf = sw_df[sw_df["studio"] == studio]
+        fig_sw.add_trace(go.Scatter(
+            x=sdf["theatrical"], y=sdf["window_days"],
+            name=studio, mode="markers+text",
+            marker=dict(size=10, color=studio_colors.get(studio, "#888")),
+            text=sdf["title"].apply(lambda t: t[:15]),
+            textposition="top center",
+            textfont=dict(size=7),
+            hovertemplate="<b>%{text}</b><br>Released: %{x|%b %Y}<br>Window: %{y} days<extra></extra>",
+            customdata=sdf["title"],
+        ))
+    fig_sw.update_layout(
+        **_base_layout(title="Theatrical-to-Streaming Window (Days)"),
+        yaxis_title="Days to Streaming",
+        height=450,
+        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+    )
+    st.plotly_chart(fig_sw, width="stretch")
+    add_export_figure("Streaming Window Analysis", fig_sw)
+
+    # Average window by studio
+    col_sw1, col_sw2 = st.columns(2)
+    with col_sw1:
+        avg_by_studio = sw_df.groupby("studio")["window_days"].mean().sort_values(ascending=True)
+        fig_avg = go.Figure(go.Bar(
+            y=avg_by_studio.index,
+            x=avg_by_studio.values,
+            orientation="h",
+            marker_color=[studio_colors.get(s, "#888") for s in avg_by_studio.index],
+            text=[f"{v:.0f} days" for v in avg_by_studio.values],
+            textposition="outside",
+        ))
+        fig_avg.update_layout(
+            **_base_layout(title="Avg Streaming Window by Studio"),
+            xaxis_title="Days", height=350,
+        )
+        st.plotly_chart(fig_avg, width="stretch")
+
+    with col_sw2:
+        # Window vs BO scatter
+        fig_corr = go.Figure(go.Scatter(
+            x=sw_df["window_days"], y=sw_df["domestic_bo"],
+            mode="markers",
+            marker=dict(
+                size=12,
+                color=[studio_colors.get(s, "#888") for s in sw_df["studio"]],
+            ),
+            text=sw_df["title"],
+            hovertemplate="<b>%{text}</b><br>Window: %{x} days<br>BO: $%{y}M<extra></extra>",
+        ))
+        fig_corr.update_layout(
+            **_base_layout(title="Streaming Window vs Domestic BO"),
+            xaxis_title="Window (Days)", yaxis_title="Domestic BO ($M)",
+            height=350,
+        )
+        st.plotly_chart(fig_corr, width="stretch")
+
+    st.caption(
+        "Shorter windows may reduce theatrical revenue but drive streaming subscriber growth. "
+        "Trend: average windows have compressed from 100+ days (2019) to ~70-90 days (2024-25)."
+    )
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 8: CPI MOVIE ADMISSIONS + EMPLOYMENT (FRED)
     # ══════════════════════════════════════════════════════════════════════
     if fred_key_available():
         st.subheader("Admissions Pricing & Employment (FRED)")
@@ -1003,6 +1405,156 @@ elif cfg["name"] == "Gaming":
             "State-level revenue data not available. "
             "This data is scraped from PlayUSA and may occasionally be unavailable."
         )
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 3B: SPORTS BETTING HANDLE vs HOLD RATE
+    # ══════════════════════════════════════════════════════════════════════
+    st.subheader("Sports Betting — Handle vs Hold Rate by State")
+    st.caption(
+        "Handle = total amount wagered | Revenue = operator gross revenue | "
+        "Hold % = revenue / handle (the house edge). Data from Legal Sports Report."
+    )
+
+    if not sports_betting_df.empty and len(sports_betting_df.columns) >= 2:
+        # Find handle, revenue, and hold columns
+        sb_cols = sports_betting_df.columns.tolist()
+        handle_col = next((c for c in sb_cols if "handle" in c.lower()), None)
+        rev_col = next((c for c in sb_cols if "revenue" in c.lower() or "rev" in c.lower()), None)
+        hold_col = next((c for c in sb_cols if "hold" in c.lower()), None)
+        state_col = next((c for c in sb_cols if c.lower() in ("state", "name")), sb_cols[0])
+
+        if handle_col:
+            sb_valid = sports_betting_df.dropna(subset=[handle_col]).copy()
+            sb_valid = sb_valid.sort_values(handle_col, ascending=True).tail(20)
+
+            fig_hh = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_hh.add_trace(go.Bar(
+                y=sb_valid[state_col],
+                x=sb_valid[handle_col],
+                name="Handle ($)",
+                orientation="h",
+                marker_color="#003087",
+                hovertemplate="<b>%{y}</b><br>Handle: $%{x:,.0f}<extra></extra>",
+            ), secondary_y=False)
+
+            if hold_col and hold_col in sb_valid.columns:
+                hold_vals = pd.to_numeric(sb_valid[hold_col].astype(str).str.rstrip('%'), errors="coerce")
+                fig_hh.add_trace(go.Scatter(
+                    y=sb_valid[state_col],
+                    x=hold_vals,
+                    name="Hold %",
+                    mode="markers+text",
+                    marker=dict(color="#e74c3c", size=10, symbol="diamond"),
+                    text=[f"{v:.1f}%" if pd.notna(v) else "" for v in hold_vals],
+                    textposition="middle right",
+                    textfont=dict(size=9),
+                    hovertemplate="<b>%{y}</b><br>Hold: %{x:.1f}%<extra></extra>",
+                ), secondary_y=True)
+
+            fig_hh.update_layout(
+                **_base_layout(title="Sports Betting Handle ($) & Hold Rate (%) by State"),
+                height=max(450, len(sb_valid) * 25),
+                legend=dict(orientation="h", yanchor="top", y=-0.08, xanchor="left", x=0),
+            )
+            fig_hh.update_xaxes(title_text="Handle ($)", tickformat="$,.0s", secondary_y=False)
+            if hold_col:
+                fig_hh.update_xaxes(title_text="Hold %", secondary_y=True)
+            st.plotly_chart(fig_hh, width="stretch")
+            add_export_figure("Sports Betting Handle vs Hold", fig_hh)
+
+            # Summary metrics
+            total_handle = sb_valid[handle_col].sum()
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.metric("Total Handle (Top States)", f"${total_handle/1e9:,.1f}B" if total_handle > 1e6 else f"${total_handle:,.0f}")
+            if rev_col and rev_col in sb_valid.columns:
+                total_rev = sb_valid[rev_col].sum()
+                sc2.metric("Total Revenue", f"${total_rev/1e9:,.1f}B" if total_rev > 1e6 else f"${total_rev:,.0f}")
+            if hold_col and hold_col in sb_valid.columns:
+                avg_hold = pd.to_numeric(sb_valid[hold_col].astype(str).str.rstrip('%'), errors="coerce").mean()
+                sc3.metric("Avg Hold %", f"{avg_hold:.1f}%" if pd.notna(avg_hold) else "N/A")
+
+        # Full sports betting table
+        with st.expander("Full Sports Betting Data Table"):
+            st.dataframe(sports_betting_df, width="stretch", height=400)
+            add_export_table("Sports Betting by State", sports_betting_df)
+    else:
+        st.info("Sports betting data not available. The data source may be temporarily unavailable.")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 3C: iGAMING PENETRATION BY STATE
+    # ══════════════════════════════════════════════════════════════════════
+    st.subheader("iGaming Revenue per Capita by State")
+    st.caption(
+        "iGaming revenue divided by adult (18+) population — a measure of market maturity. "
+        "Higher penetration = more established online gambling market."
+    )
+
+    # Census 2024 estimates: 18+ population by iGaming-legal state (thousands)
+    STATE_ADULT_POP = {
+        "New Jersey": 7_340, "Pennsylvania": 10_430, "Michigan": 7_920,
+        "Connecticut": 2_920, "West Virginia": 1_420, "Delaware": 800,
+        "Rhode Island": 880, "New York": 16_180, "Illinois": 10_080,
+        "Nevada": 2_500, "Indiana": 5_350, "Iowa": 2_450,
+        "Colorado": 4_650, "Virginia": 6_870, "Arizona": 5_850,
+        "Ohio": 9_400, "Maryland": 4_870, "Louisiana": 3_660,
+        "Tennessee": 5_550, "Kansas": 2_280, "Massachusetts": 5_730,
+        "Kentucky": 3_580, "North Carolina": 8_480, "Maine": 1_130,
+        "Vermont": 530, "Oregon": 3_360, "Washington": 6_190,
+    }
+
+    if not state_rev_df.empty:
+        rev_numeric = [c for c in state_rev_df.columns
+                       if c.lower() not in ("state", "launch", "status")
+                       and state_rev_df[c].dtype in ("float64", "int64")]
+
+        if rev_numeric:
+            rev_col_name = rev_numeric[0]  # Use first revenue column
+            penetration_rows = []
+            state_col_name = "State" if "State" in state_rev_df.columns else state_rev_df.columns[0]
+
+            for _, row in state_rev_df.iterrows():
+                state_name = str(row[state_col_name]).strip()
+                rev_val = row[rev_col_name]
+                adult_pop = STATE_ADULT_POP.get(state_name)
+                if pd.notna(rev_val) and adult_pop and adult_pop > 0 and rev_val > 0:
+                    penetration_rows.append({
+                        "State": state_name,
+                        "Revenue": rev_val,
+                        "Adult Pop (K)": adult_pop,
+                        "Revenue per Capita": rev_val / (adult_pop * 1000),
+                    })
+
+            if penetration_rows:
+                pen_df = pd.DataFrame(penetration_rows).sort_values("Revenue per Capita", ascending=True)
+
+                fig_pen = go.Figure(go.Bar(
+                    y=pen_df["State"],
+                    x=pen_df["Revenue per Capita"],
+                    orientation="h",
+                    marker_color="#00A651",
+                    hovertemplate="<b>%{y}</b><br>$%{x:,.0f} per adult<extra></extra>",
+                    text=[f"${v:,.0f}" for v in pen_df["Revenue per Capita"]],
+                    textposition="outside",
+                    textfont=dict(size=10),
+                ))
+                fig_pen.update_layout(
+                    **_base_layout(title=f"iGaming {rev_col_name} per Adult Capita by State"),
+                    xaxis_title="Revenue per Capita ($)",
+                    xaxis_tickformat="$,.0f",
+                    height=max(400, len(pen_df) * 30),
+                )
+                st.plotly_chart(fig_pen, width="stretch")
+                add_export_figure("iGaming Penetration per Capita", fig_pen)
+            else:
+                st.info("Could not compute penetration — state names may not match Census data.")
+        else:
+            st.info("No numeric revenue columns found in state data.")
+    else:
+        st.info("iGaming state revenue data not available.")
 
     st.divider()
 
@@ -1466,11 +2018,15 @@ else:
 
         # ═══════════════════════════════════════════════════════════════════
         # SECTION 1: INDUSTRY PRICING
+        # (Skipped for Paper & Packaging — shown on Input Costs page instead)
         # ═══════════════════════════════════════════════════════════════════
-        st.header(lbl.get("industry_section_title", "Industry Pricing"))
+        if industry_name == "Paper & Packaging":
+            pass  # Industry pricing charts moved to Input Costs page
+        elif True:
+            st.header(lbl.get("industry_section_title", "Industry Pricing"))
 
         # ── Industry KPI series (e.g. PPI Corrugated Shipping Containers) ──
-        if "industry_kpi" in series_data:
+        if industry_name != "Paper & Packaging" and "industry_kpi" in series_data:
             kpi_label = lbl.get("industry_kpi_label", "Industry KPI Index")
             kpi_s = series_data["industry_kpi"]
             yoy_kpi = yoy(kpi_s)
@@ -1508,7 +2064,7 @@ else:
                 st.plotly_chart(fig_kpi_abs, width="stretch")
 
         # ── Dual pricing series (e.g. PPI Corrugated Paperboard vs Wood Pulp) ──
-        if "cpi_industry_1" in series_data:
+        if industry_name != "Paper & Packaging" and "cpi_industry_1" in series_data:
             s1 = series_data["cpi_industry_1"]
             s2 = series_data.get("cpi_industry_2", pd.Series(dtype=float))
             yoy_1 = yoy(s1)
@@ -1666,8 +2222,8 @@ else:
         # SECTION 2.5: P&P-SPECIFIC — Supply, Demand & Recycled Fiber
         # ═══════════════════════════════════════════════════════════════════
         pp_keys = ["box_production", "box_shipment_value",
-                   "box_inventories", "capacity_util", "occ_ppi", "recycled_paperboard",
-                   "kraft_linerboard", "corrugated_output", "cass_freight"]
+                   "box_inventories", "occ_ppi", "recycled_paperboard",
+                   "kraft_linerboard", "containerboard_ppi"]
         pp_data = {}
         if fred_key_available() and industry_name == "Paper & Packaging":
             with st.spinner("Fetching additional P&P data…"):
@@ -1682,79 +2238,191 @@ else:
             st.header(lbl.get("supply_demand_section_title", "Supply, Demand & Recycled Fiber"))
             st.caption(lbl.get("supply_demand_caption", ""))
 
-            # ── Row 1: Box Production + Capacity Utilization ─────────────
-            col_bp, col_cu = st.columns(2)
+            # ══════════════════════════════════════════════════════════════
+            # CONTAINERBOARD & OCC PRICING DASHBOARD (RISI proxy)
+            # ══════════════════════════════════════════════════════════════
+            pricing_series = {}
+            pricing_labels = {
+                "containerboard_ppi": ("Corrugated Paperboard (Sub)", "#1565C0"),
+                "kraft_linerboard":   ("Kraft Linerboard",            "#E67E22"),
+                "recycled_paperboard": ("Recycled Paperboard",        "#2ECC71"),
+                "occ_ppi":            ("OCC (Recycled Fiber)",         "#C0392B"),
+            }
+            for key, (label, _color) in pricing_labels.items():
+                if key in pp_data:
+                    pricing_series[key] = pp_data[key]
 
-            with col_bp:
-                if "box_production" in pp_data:
-                    bp = pp_data["box_production"]
-                    st.subheader(lbl.get("box_production_chart_title", "Box Production Index"))
-                    fig_bp = go.Figure(go.Scatter(
-                        x=bp.index, y=bp.values,
-                        name=lbl.get("box_production_label", "Production Index"),
-                        line=dict(color="#1565C0", width=2.5),
-                        fill="tozeroy", fillcolor="rgba(21, 101, 192, 0.08)",
-                    ))
-                    fig_bp.update_layout(
-                        **_base_layout(title=lbl.get("box_production_chart_title", "Box Production")),
-                        yaxis_title="Index (2017=100)", height=380,
-                    )
-                    st.plotly_chart(fig_bp, width="stretch")
+            if pricing_series:
+                st.subheader("Containerboard & OCC Pricing (FRED PPI)")
+                st.caption(
+                    "FRED PPI series as proxies for RISI/Fastmarkets benchmark prices. "
+                    "Kraft Linerboard and Recycled Paperboard track containerboard grades; "
+                    "OCC tracks the recycled fiber input cost."
+                )
 
-            with col_cu:
-                if "capacity_util" in pp_data:
-                    cu = pp_data["capacity_util"]
-                    st.subheader(lbl.get("capacity_util_chart_title", "Capacity Utilization"))
-                    fig_cu = go.Figure(go.Scatter(
-                        x=cu.index, y=cu.values,
-                        name="Capacity Utilization %",
-                        line=dict(color="#8B4513", width=2.5),
-                    ))
-                    # Add reference bands
-                    fig_cu.add_hline(y=95, line_color="rgba(231,76,60,0.5)", line_width=1,
-                                     line_dash="dash", annotation_text="Tight (95%)")
-                    fig_cu.add_hline(y=90, line_color="rgba(46,204,113,0.5)", line_width=1,
-                                     line_dash="dash", annotation_text="Normal (90%)")
-                    fig_cu.update_layout(
-                        **_base_layout(title=lbl.get("capacity_util_chart_title", "Capacity Util %")),
-                        yaxis_title="Percent", height=380,
-                    )
-                    st.plotly_chart(fig_cu, width="stretch")
-                    st.caption(lbl.get("capacity_util_caption", ""))
-
-            # ── Row 2: OCC (Recycled Fiber) + Shipment Value ─────────────
-            col_occ, col_sv = st.columns(2)
-
-            with col_occ:
-                if "occ_ppi" in pp_data:
-                    occ = pp_data["occ_ppi"]
-                    yoy_occ = yoy(occ)
-                    if not yoy_occ.empty:
-                        st.subheader(lbl.get("occ_chart_title", "OCC Price Index (YoY %)"))
-                        fig_occ = go.Figure(go.Scatter(
-                            x=yoy_occ.index, y=yoy_occ.values,
-                            name="OCC PPI",
-                            line=dict(color="#C0392B", width=2.5),
-                            fill="tozeroy", fillcolor="rgba(192, 57, 43, 0.08)",
+                # ── Combined YoY % chart — all pricing series ──────────
+                fig_cb = go.Figure()
+                for key, series in pricing_series.items():
+                    label, color = pricing_labels[key]
+                    yoy_s = yoy(series)
+                    if not yoy_s.empty:
+                        fig_cb.add_trace(go.Scatter(
+                            x=yoy_s.index, y=yoy_s.values,
+                            name=label,
+                            line=dict(color=color, width=2.5),
+                            hovertemplate=f"<b>{label}</b><br>" + "%{x|%b %Y}: %{y:.1f}%<extra></extra>",
                         ))
-                        fig_occ.add_hline(y=0, line_color="rgba(0,0,0,0.3)", line_width=1)
-                        fig_occ.update_layout(
-                            **_base_layout(title=lbl.get("occ_chart_title", "OCC (YoY %)")),
-                            yaxis_title="YoY %", height=380,
-                        )
-                        st.plotly_chart(fig_occ, width="stretch")
-                        st.caption(lbl.get("occ_caption", ""))
+                fig_cb.add_hline(y=0, line_color="rgba(0,0,0,0.3)", line_width=1)
+                fig_cb.update_layout(
+                    **_base_layout(title="Containerboard & OCC Pricing Indices (YoY %)"),
+                    yaxis_title="YoY %", height=440,
+                    legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+                )
+                st.plotly_chart(fig_cb, width="stretch")
 
-                    with st.expander("Show OCC Absolute Index Level"):
-                        fig_occ_abs = go.Figure(go.Scatter(
-                            x=occ.index, y=occ.values,
-                            name="OCC PPI", line=dict(color="#C0392B", width=2),
+                # ── Estimated OCC $/ton from PPI calibration ──────────
+                if "occ_ppi" in pricing_series:
+                    occ_index = pricing_series["occ_ppi"]
+                    # Base period: Dec 2003 = 100. Industry reference: OCC #11 ≈ $95/short ton in Dec 2003
+                    OCC_BASE_PRICE = 95.0  # $/short ton at index = 100
+                    occ_est_price = occ_index * (OCC_BASE_PRICE / 100.0)
+
+                    st.markdown("**Estimated OCC #11 Price ($/short ton)**")
+                    st.caption(
+                        "Derived from FRED PPI for corrugated recyclable paper (PCU42993042993033). "
+                        "Calibrated using Dec 2003 base = $95/ton. This is an estimate — "
+                        "actual spot prices from Fastmarkets/RISI may differ."
+                    )
+                    fig_occ_price = go.Figure()
+                    fig_occ_price.add_trace(go.Scatter(
+                        x=occ_est_price.index, y=occ_est_price.values,
+                        name="OCC #11 Est. $/ton",
+                        line=dict(color="#C0392B", width=2.5),
+                        fill="tozeroy", fillcolor="rgba(192, 57, 43, 0.06)",
+                        hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:.0f}/ton<extra></extra>",
+                    ))
+                    # Add reference lines for key thresholds
+                    fig_occ_price.add_hline(
+                        y=100, line_color="rgba(0,0,0,0.15)", line_width=1,
+                        line_dash="dash", annotation_text="$100/ton",
+                    )
+                    latest_price = occ_est_price.iloc[-1]
+                    fig_occ_price.update_layout(
+                        **_base_layout(title=f"OCC #11 Estimated Price — Latest: ${latest_price:.0f}/ton"),
+                        yaxis_title="$/short ton",
+                        yaxis_tickprefix="$",
+                        height=400,
+                    )
+                    st.plotly_chart(fig_occ_price, width="stretch")
+
+                # ── Combined Absolute Index chart ──────────────────────
+                with st.expander("Show Absolute Index Levels"):
+                    fig_cb_abs = go.Figure()
+                    for key, series in pricing_series.items():
+                        label, color = pricing_labels[key]
+                        fig_cb_abs.add_trace(go.Scatter(
+                            x=series.index, y=series.values,
+                            name=label,
+                            line=dict(color=color, width=2),
+                            hovertemplate=f"<b>{label}</b><br>" + "%{x|%b %Y}: %{y:.1f}<extra></extra>",
                         ))
-                        fig_occ_abs.update_layout(
-                            **_base_layout(title="OCC (Corrugated Recyclable Paper) — Index Level"),
-                            yaxis_title="Index", height=340,
-                        )
-                        st.plotly_chart(fig_occ_abs, width="stretch")
+                    fig_cb_abs.update_layout(
+                        **_base_layout(title="Containerboard & OCC — Index Level"),
+                        yaxis_title="Index", height=400,
+                        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+                    )
+                    st.plotly_chart(fig_cb_abs, width="stretch")
+
+                # ── Kraft Linerboard vs Recycled Paperboard ────────────
+                if "kraft_linerboard" in pricing_series and "recycled_paperboard" in pricing_series:
+                    col_kl, col_rp = st.columns(2)
+                    with col_kl:
+                        kl = pricing_series["kraft_linerboard"]
+                        yoy_kl = yoy(kl)
+                        if not yoy_kl.empty:
+                            st.markdown("**Kraft Linerboard PPI (YoY %)**")
+                            fig_kl = go.Figure(go.Scatter(
+                                x=yoy_kl.index, y=yoy_kl.values,
+                                name="Kraft Linerboard",
+                                line=dict(color="#E67E22", width=2.5),
+                                fill="tozeroy", fillcolor="rgba(230, 126, 34, 0.08)",
+                            ))
+                            fig_kl.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
+                            fig_kl.update_layout(
+                                **_base_layout(title="PPI Kraft Linerboard (YoY %)"),
+                                yaxis_title="YoY %", height=360,
+                            )
+                            st.plotly_chart(fig_kl, width="stretch")
+                            st.caption(
+                                "PPI for unbleached kraft packaging paperboard — tracks virgin "
+                                "containerboard pricing. Key benchmark for IP, PKG, SW."
+                            )
+
+                    with col_rp:
+                        rp = pricing_series["recycled_paperboard"]
+                        yoy_rp = yoy(rp)
+                        if not yoy_rp.empty:
+                            st.markdown("**Recycled Paperboard PPI (YoY %)**")
+                            fig_rp = go.Figure(go.Scatter(
+                                x=yoy_rp.index, y=yoy_rp.values,
+                                name="Recycled Paperboard",
+                                line=dict(color="#2ECC71", width=2.5),
+                                fill="tozeroy", fillcolor="rgba(46, 204, 113, 0.08)",
+                            ))
+                            fig_rp.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
+                            fig_rp.update_layout(
+                                **_base_layout(title="PPI Recycled Paperboard (YoY %)"),
+                                yaxis_title="YoY %", height=360,
+                            )
+                            st.plotly_chart(fig_rp, width="stretch")
+                            st.caption(
+                                "PPI for recycled paperboard — tracks the output price "
+                                "for mills using recycled fiber (GEF, CAS.TO, GPK)."
+                            )
+
+                    # ── Virgin vs Recycled Spread ──────────────────────
+                    yoy_kraft = yoy(pricing_series["kraft_linerboard"])
+                    yoy_recycled = yoy(pricing_series["recycled_paperboard"])
+                    vr_spread = (yoy_kraft - yoy_recycled).dropna()
+                    if not vr_spread.empty:
+                        with st.expander("Kraft vs Recycled Paperboard Spread (YoY pp) — Grade Premium"):
+                            fig_vr = go.Figure(go.Bar(
+                                x=vr_spread.index, y=vr_spread.values,
+                                marker_color=["#E67E22" if v > 0 else "#2ECC71" for v in vr_spread.values],
+                                hovertemplate="%{x|%b %Y}: %{y:.2f}pp<extra></extra>",
+                            ))
+                            fig_vr.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
+                            fig_vr.update_layout(
+                                **_base_layout(title="Kraft Linerboard − Recycled Paperboard (YoY pp)"),
+                                yaxis_title="Percentage Points", height=320,
+                            )
+                            st.plotly_chart(fig_vr, width="stretch")
+                            st.caption(
+                                "Orange = kraft rising faster (virgin premium widening). "
+                                "Green = recycled rising faster (recycled catching up). "
+                                "A widening spread favors recycled mills on relative cost."
+                            )
+
+                st.divider()
+
+            # ── Row 1: Box Production ──────────────────────────────────
+            if "box_production" in pp_data:
+                bp = pp_data["box_production"]
+                st.subheader(lbl.get("box_production_chart_title", "Box Production Index"))
+                fig_bp = go.Figure(go.Scatter(
+                    x=bp.index, y=bp.values,
+                    name=lbl.get("box_production_label", "Production Index"),
+                    line=dict(color="#1565C0", width=2.5),
+                    fill="tozeroy", fillcolor="rgba(21, 101, 192, 0.08)",
+                ))
+                fig_bp.update_layout(
+                    **_base_layout(title=lbl.get("box_production_chart_title", "Box Production")),
+                    yaxis_title="Index (2017=100)", height=380,
+                )
+                st.plotly_chart(fig_bp, width="stretch")
+
+            # ── Row 2: Box Shipment Value + Inventories ──────────────────
+            col_sv, col_inv = st.columns(2)
 
             with col_sv:
                 if "box_shipment_value" in pp_data:
@@ -1772,10 +2440,10 @@ else:
                     )
                     st.plotly_chart(fig_sv, width="stretch")
 
-            # ── Row 3: Inventories ─────────────────────────────────────
-            if "box_inventories" in pp_data:
-                with st.expander("Paperboard Container Inventories ($M, SA)"):
+            with col_inv:
+                if "box_inventories" in pp_data:
                     inv = pp_data["box_inventories"]
+                    st.subheader("Paperboard Container Inventories")
                     fig_inv = go.Figure(go.Scatter(
                         x=inv.index, y=inv.values,
                         name="Inventories ($M)",
@@ -1783,70 +2451,10 @@ else:
                         fill="tozeroy", fillcolor="rgba(136, 78, 160, 0.08)",
                     ))
                     fig_inv.update_layout(
-                        **_base_layout(title="Total Inventories: Paperboard Container ($M, SA)"),
+                        **_base_layout(title="Inventories: Paperboard Container ($M, SA)"),
                         yaxis_title="Millions $", height=380,
                     )
                     st.plotly_chart(fig_inv, width="stretch")
-
-            # ── Row 4: Volume & Shipments ──────────────────────────────
-            col_co, col_cf = st.columns(2)
-
-            with col_co:
-                if "corrugated_output" in pp_data:
-                    co = pp_data["corrugated_output"]
-                    st.subheader(lbl.get("corrugated_output_chart_title", "Corrugated Box Output"))
-                    fig_co = go.Figure(go.Scatter(
-                        x=co.index, y=co.values,
-                        name="Real Output",
-                        line=dict(color="#2980B9", width=2.5),
-                        fill="tozeroy", fillcolor="rgba(41, 128, 185, 0.08)",
-                    ))
-                    fig_co.update_layout(
-                        **_base_layout(title=lbl.get("corrugated_output_chart_title", "Output")),
-                        yaxis_title="Index", height=380,
-                    )
-                    st.plotly_chart(fig_co, width="stretch")
-                    st.caption(lbl.get("corrugated_output_caption", ""))
-
-            with col_cf:
-                if "cass_freight" in pp_data:
-                    cf = pp_data["cass_freight"]
-                    st.subheader(lbl.get("cass_freight_chart_title", "Cass Freight Shipments"))
-                    fig_cf = go.Figure(go.Scatter(
-                        x=cf.index, y=cf.values,
-                        name="Shipment Index",
-                        line=dict(color="#E67E22", width=2.5),
-                        fill="tozeroy", fillcolor="rgba(230, 126, 34, 0.08)",
-                    ))
-                    fig_cf.update_layout(
-                        **_base_layout(title=lbl.get("cass_freight_chart_title", "Cass Freight")),
-                        yaxis_title="Index", height=380,
-                    )
-                    st.plotly_chart(fig_cf, width="stretch")
-                    st.caption(lbl.get("cass_freight_caption", ""))
-
-            # ── OCC vs Containerboard Spread ─────────────────────────────
-            if "occ_ppi" in pp_data and "cpi_industry_1" in series_data:
-                occ_yoy = yoy(pp_data["occ_ppi"])
-                cb_yoy = yoy(series_data["cpi_industry_1"])
-                spread_occ = (cb_yoy - occ_yoy).dropna()
-                if not spread_occ.empty:
-                    with st.expander("Containerboard PPI vs OCC Spread (YoY pp) — Margin Proxy"):
-                        fig_sp = go.Figure(go.Bar(
-                            x=spread_occ.index, y=spread_occ.values,
-                            marker_color=["#2ecc71" if v > 0 else "#e74c3c" for v in spread_occ.values],
-                            hovertemplate="%{x|%b %Y}: %{y:.2f}pp<extra></extra>",
-                        ))
-                        fig_sp.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
-                        fig_sp.update_layout(
-                            **_base_layout(title="Containerboard PPI \u2212 OCC PPI (YoY pp Spread)"),
-                            yaxis_title="Percentage Points", height=320,
-                        )
-                        st.plotly_chart(fig_sp, width="stretch")
-                        st.caption(
-                            "Green = containerboard prices rising faster than OCC (margin expansion). "
-                            "Red = OCC rising faster (margin compression for recycled mills)."
-                        )
 
             st.divider()
 
@@ -1876,6 +2484,7 @@ else:
             "occ_ppi": lbl.get("occ_ppi_label"),
             "recycled_paperboard": lbl.get("recycled_paperboard_label"),
             "kraft_linerboard": lbl.get("kraft_linerboard_label"),
+            "containerboard_ppi": lbl.get("containerboard_ppi_label"),
             "corrugated_output": lbl.get("corrugated_output_label"),
             "cass_freight": lbl.get("cass_freight_label"),
         }
@@ -1948,6 +2557,193 @@ else:
         ],
     }
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # INDUSTRY-SPECIFIC FEATURES
+    # ═══════════════════════════════════════════════════════════════════════
+
+    if industry_name == "Paper & Packaging":
+        # ── P&P: Containerboard Price Increase Tracker ────────────────────
+        st.divider()
+        st.subheader("Containerboard Price Increase Tracker")
+        st.caption(
+            "Monitoring RSS feeds (BusinessWire, PR Newswire, Reuters) for containerboard "
+            "and corrugated price increase announcements."
+        )
+
+        from utils.data_fetchers import get_containerboard_price_increases, get_pp_curtailment_news
+
+        with st.spinner("Scanning news feeds for price increase announcements…"):
+            price_inc_df = get_containerboard_price_increases()
+
+        if not price_inc_df.empty:
+            st.success(f"Found {len(price_inc_df)} price-related announcement(s)")
+
+            # Timeline scatter
+            if "Date" in price_inc_df.columns and price_inc_df["Date"].notna().any():
+                fig_pi = go.Figure(go.Scatter(
+                    x=price_inc_df["Date"],
+                    y=[1] * len(price_inc_df),
+                    mode="markers+text",
+                    marker=dict(size=14, color="#e74c3c", symbol="triangle-up"),
+                    text=price_inc_df["Headline"].str[:40],
+                    textposition="top center",
+                    textfont=dict(size=8),
+                    hovertemplate="<b>%{text}</b><br>%{x|%b %d, %Y}<extra></extra>",
+                    customdata=price_inc_df["Headline"],
+                ))
+                fig_pi.update_layout(
+                    **_base_layout(title="Price Increase Announcements Timeline"),
+                    yaxis=dict(visible=False),
+                    height=250,
+                )
+                st.plotly_chart(fig_pi, width="stretch")
+                add_export_figure("Price Increase Timeline", fig_pi)
+
+            # News table
+            display_cols = [c for c in ["Date", "Headline", "Source"] if c in price_inc_df.columns]
+            if display_cols:
+                show_df = price_inc_df[display_cols].copy()
+                if "Date" in show_df.columns:
+                    show_df["Date"] = show_df["Date"].dt.strftime("%Y-%m-%d")
+                st.dataframe(show_df.head(20), width="stretch", hide_index=True)
+                add_export_table("Price Increase Announcements", show_df)
+        else:
+            st.info(
+                "No containerboard price increase announcements found in recent RSS feeds. "
+                "This tracker monitors BusinessWire, PR Newswire, and Reuters for keywords like "
+                "'containerboard', 'price increase', 'linerboard', 'corrugating medium'."
+            )
+
+        # ── P&P: Downtime / Curtailment Calendar ─────────────────────────
+        st.divider()
+        st.subheader("Mill Downtime & Curtailment Monitor")
+        st.caption(
+            "Scanning news feeds for mill downtime, curtailment, and capacity reduction announcements."
+        )
+
+        with st.spinner("Scanning news feeds for curtailment announcements…"):
+            curtail_df = get_pp_curtailment_news()
+
+        if not curtail_df.empty:
+            st.warning(f"Found {len(curtail_df)} downtime/curtailment mention(s)")
+            display_cols = [c for c in ["Date", "Headline", "Source"] if c in curtail_df.columns]
+            if display_cols:
+                show_df = curtail_df[display_cols].copy()
+                if "Date" in show_df.columns:
+                    show_df["Date"] = show_df["Date"].dt.strftime("%Y-%m-%d")
+                st.dataframe(show_df.head(15), width="stretch", hide_index=True)
+                add_export_table("Curtailment News", show_df)
+        else:
+            st.info(
+                "No recent downtime/curtailment mentions found. "
+                "This monitors for keywords like 'downtime', 'curtailment', 'mill closure', "
+                "'capacity reduction' in industry news feeds."
+            )
+
+    elif industry_name == "Leisure":
+        # ── Leisure: Hotel & Cruise Metrics ───────────────────────────────
+        st.divider()
+        st.subheader("Hotel & Cruise Line Company Metrics")
+        st.caption(
+            "Quarterly financials for hotel chains (MAR, HLT, H) and cruise lines (RCL, CCL, NCLH) — "
+            "revenue and EBITDA comparison. Data from stockanalysis.com."
+        )
+
+        from utils.data_fetchers import get_company_quarterly_financials
+
+        # Hotel companies
+        hotel_tickers = ["MAR", "HLT", "H", "WH", "CHH"]
+        cruise_tickers = ["RCL", "CCL", "NCLH"]
+
+        hotel_tab, cruise_tab = st.tabs(["Hotels", "Cruise Lines"])
+
+        with hotel_tab:
+            with st.spinner("Fetching hotel company financials…"):
+                hotel_fin_df = get_company_quarterly_financials(hotel_tickers)
+
+            if not hotel_fin_df.empty:
+                hotel_colors = ["#003087", "#1ABC9C", "#e67e22", "#8E44AD", "#e74c3c"]
+                fin_hotel_tickers = hotel_fin_df["Ticker"].unique()
+
+                fig_hotel_rev = go.Figure()
+                for i, tkr in enumerate(fin_hotel_tickers):
+                    tkr_df = hotel_fin_df[hotel_fin_df["Ticker"] == tkr].dropna(subset=["Revenue"]).tail(8)
+                    if tkr_df.empty:
+                        continue
+                    fig_hotel_rev.add_trace(go.Bar(
+                        x=tkr_df["Quarter"].apply(lambda d: f"{d.year}-Q{(d.month-1)//3+1}") if pd.api.types.is_datetime64_any_dtype(tkr_df["Quarter"]) else tkr_df["Quarter"].astype(str),
+                        y=tkr_df["Revenue"] / 1e9,
+                        name=tkr,
+                        marker_color=hotel_colors[i % len(hotel_colors)],
+                    ))
+                fig_hotel_rev.update_layout(
+                    **_base_layout(title="Hotel Company Quarterly Revenue ($B)"),
+                    barmode="group", yaxis_title="Revenue ($B)", height=420,
+                    legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+                )
+                st.plotly_chart(fig_hotel_rev, width="stretch")
+                add_export_figure("Hotel Quarterly Revenue", fig_hotel_rev)
+
+                with st.expander("Hotel Financials Data"):
+                    st.dataframe(hotel_fin_df, width="stretch", height=400)
+                    add_export_table("Hotel Financials", hotel_fin_df)
+            else:
+                st.info("Hotel company financial data not available.")
+
+        with cruise_tab:
+            with st.spinner("Fetching cruise line financials…"):
+                cruise_fin_df = get_company_quarterly_financials(cruise_tickers)
+
+            if not cruise_fin_df.empty:
+                cruise_colors = ["#003087", "#e74c3c", "#2ecc71"]
+                fin_cruise_tickers = cruise_fin_df["Ticker"].unique()
+
+                fig_cruise_rev = go.Figure()
+                for i, tkr in enumerate(fin_cruise_tickers):
+                    tkr_df = cruise_fin_df[cruise_fin_df["Ticker"] == tkr].dropna(subset=["Revenue"]).tail(8)
+                    if tkr_df.empty:
+                        continue
+                    fig_cruise_rev.add_trace(go.Bar(
+                        x=tkr_df["Quarter"].apply(lambda d: f"{d.year}-Q{(d.month-1)//3+1}") if pd.api.types.is_datetime64_any_dtype(tkr_df["Quarter"]) else tkr_df["Quarter"].astype(str),
+                        y=tkr_df["Revenue"] / 1e9,
+                        name=tkr,
+                        marker_color=cruise_colors[i % len(cruise_colors)],
+                    ))
+                fig_cruise_rev.update_layout(
+                    **_base_layout(title="Cruise Line Quarterly Revenue ($B)"),
+                    barmode="group", yaxis_title="Revenue ($B)", height=420,
+                    legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+                )
+                st.plotly_chart(fig_cruise_rev, width="stretch")
+                add_export_figure("Cruise Line Quarterly Revenue", fig_cruise_rev)
+
+                # Fuel cost overlay: crude oil vs cruise stocks
+                if fred_key_available():
+                    crude_oil = get_fred_series("DCOILWTICO", start=start_date)
+                    if not crude_oil.empty:
+                        fig_fuel = go.Figure()
+                        fig_fuel.add_trace(go.Scatter(
+                            x=crude_oil.index, y=crude_oil.values,
+                            name="WTI Crude Oil ($/bbl)",
+                            line=dict(color="#e74c3c", width=2),
+                            fill="tozeroy", fillcolor="rgba(231, 76, 60, 0.08)",
+                        ))
+                        fig_fuel.update_layout(
+                            **_base_layout(title="Crude Oil (WTI) — Key Cruise Line Cost Driver"),
+                            yaxis_title="$/barrel", height=350,
+                        )
+                        st.plotly_chart(fig_fuel, width="stretch")
+                        st.caption(
+                            "Bunker fuel (derived from crude oil) is the largest variable cost for cruise lines. "
+                            "RCL, CCL, and NCLH spend $1-2B+ annually on fuel."
+                        )
+
+                with st.expander("Cruise Line Financials Data"):
+                    st.dataframe(cruise_fin_df, width="stretch", height=400)
+                    add_export_table("Cruise Financials", cruise_fin_df)
+            else:
+                st.info("Cruise line financial data not available.")
+
     if industry_name in kpi_info:
         st.divider()
         st.subheader(f"Key Earnings KPIs to Monitor — {industry_name}")
@@ -1966,3 +2762,6 @@ else:
         })
     if comp_rows:
         st.dataframe(pd.DataFrame(comp_rows).set_index("Ticker"), width="stretch")
+
+# ── Export sidebar (all industries) ────────────────────────────────────
+render_export_sidebar(cfg["name"])

@@ -17,6 +17,10 @@ from utils.charts import (
     job_openings_chart, _base_layout,
 )
 from utils.style import inject_css
+from utils.export import (
+    reset_export_state, add_export_figure, add_export_table,
+    add_export_metric, render_export_sidebar,
+)
 
 st.set_page_config(page_title="Macro & Industry", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "assets", "arini_logo.svg"))
@@ -26,6 +30,7 @@ inject_css()
 cfg = render_industry_selector()
 
 st.title("Macro & Industry Environment")
+reset_export_state()
 fs = cfg["fred_series"]
 lbl = cfg["macro_labels"]
 
@@ -323,3 +328,6 @@ st.caption(
                             fs.get("job_openings")] if v)
     + "."
 )
+
+# ── Export sidebar ─────────────────────────────────────────────────────
+render_export_sidebar(cfg["name"])
