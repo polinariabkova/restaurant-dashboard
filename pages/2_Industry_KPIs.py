@@ -841,93 +841,65 @@ elif cfg["name"] == "Movie Theaters":
                     pct = row.get('% vs LW', '')
                     st.markdown(f"- **{row['Title']}** — {gross} ({pct} vs LW)")
 
-        # ── Distributor market share ──────────────────────────────────────
-        if "Distributor" in weekly_chart_df.columns and "Gross" in weekly_chart_df.columns:
-            dist_share = weekly_chart_df.groupby("Distributor")["Gross"].sum().sort_values(ascending=False)
-            dist_share = dist_share[dist_share > 0].head(10)
-            if not dist_share.empty:
-                st.subheader("Distributor Market Share")
-                st.caption(
-                    "Left: this weekend's box office split by distributor (top 10). "
-                    "Right: 5-year annual gross by top 6 studios (remaining grouped as 'Other')."
-                )
+        # ── Distributor market share — stacked bar by year ────────────────
+        st.subheader("Annual Box Office by Studio")
+        st.caption(
+            f"Top studios by total domestic gross — {current_year} is year-to-date. "
+            "Remaining studios grouped as 'Other'."
+        )
 
-                col_pie, col_bar5 = st.columns(2)
+        with st.spinner("Fetching distributor history…"):
+            dist_hist = get_distributor_share_multi_year(
+                list(range(current_year - 4, current_year + 1))
+            )
+        if not dist_hist.empty:
+            # Top 6 studios by total gross across all years
+            top_dist = (
+                dist_hist.groupby("Distributor")["Total Gross"]
+                .sum().nlargest(6).index.tolist()
+            )
+            plot_df = dist_hist.copy()
+            plot_df["Distributor"] = plot_df["Distributor"].where(
+                plot_df["Distributor"].isin(top_dist), "Other"
+            )
+            pivot = plot_df.groupby(["Year", "Distributor"])["Total Gross"].sum().unstack(fill_value=0)
+            pivot = pivot[pivot.sum().sort_values(ascending=False).index]
 
-                # Pie chart — this weekend
-                with col_pie:
-                    st.markdown("**This Weekend — Top 10 Distributors**")
-                    fig_pie = go.Figure(go.Pie(
-                        labels=dist_share.index,
-                        values=dist_share.values,
-                        textinfo="percent",
-                        textfont=dict(size=11),
-                        hovertemplate="<b>%{label}</b><br>$%{value:,.0f}<br>%{percent}<extra></extra>",
-                        marker=dict(colors=[
-                            "#1565C0", "#e67e22", "#2ecc71", "#e74c3c", "#9b59b6",
-                            "#f39c12", "#1abc9c", "#3498db", "#c0392b", "#7f8c8d",
-                        ]),
-                    ))
-                    fig_pie.update_layout(
-                        **_base_layout(title="Weekend BO by Distributor"),
-                        height=460,
-                        showlegend=True,
-                        legend=dict(
-                            orientation="v", yanchor="middle", y=0.5,
-                            xanchor="left", x=1.02, font=dict(size=10),
-                        ),
-                    )
-                    st.plotly_chart(fig_pie, width="stretch")
+            # Label current year as "2026 YTD"
+            x_labels = [
+                f"{int(yr)} YTD" if yr == current_year else str(int(yr))
+                for yr in pivot.index
+            ]
 
-                # 5-year stacked bar chart
-                with col_bar5:
-                    st.markdown("**Annual Market Share — Top 6 Distributors**")
-                    with st.spinner("Fetching distributor history…"):
-                        dist_hist = get_distributor_share_multi_year(
-                            list(range(current_year - 4, current_year + 1))
-                        )
-                    if not dist_hist.empty:
-                        # Get top 6 distributors by total gross across all years
-                        top_dist = (
-                            dist_hist.groupby("Distributor")["Total Gross"]
-                            .sum().nlargest(6).index.tolist()
-                        )
-                        # Group remaining as "Other"
-                        plot_df = dist_hist.copy()
-                        plot_df["Distributor"] = plot_df["Distributor"].where(
-                            plot_df["Distributor"].isin(top_dist), "Other"
-                        )
-                        pivot = plot_df.groupby(["Year", "Distributor"])["Total Gross"].sum().unstack(fill_value=0)
-                        # Sort columns by total
-                        pivot = pivot[pivot.sum().sort_values(ascending=False).index]
-
-                        dist_colors = [
-                            "#1565C0", "#e67e22", "#2ecc71", "#e74c3c",
-                            "#9b59b6", "#f39c12", "#95a5a6",
-                        ]
-                        fig_bar5 = go.Figure()
-                        for i, col in enumerate(pivot.columns):
-                            fig_bar5.add_trace(go.Bar(
-                                x=pivot.index.astype(str),
-                                y=pivot[col],
-                                name=col,
-                                marker_color=dist_colors[i % len(dist_colors)],
-                                hovertemplate=f"<b>{col}</b><br>" + "%{x}: $%{y:,.0f}<extra></extra>",
-                            ))
-                        fig_bar5.update_layout(
-                            **_base_layout(title="Annual Gross by Distributor"),
-                            barmode="stack",
-                            yaxis_title="Total Gross ($)",
-                            yaxis_tickformat="$,.0s",
-                            height=460,
-                            legend=dict(
-                                orientation="h", yanchor="top", y=-0.13,
-                                xanchor="left", x=0, font=dict(size=11),
-                            ),
-                        )
-                        st.plotly_chart(fig_bar5, width="stretch")
-                    else:
-                        st.info("Historical distributor data unavailable.")
+            dist_colors = [
+                "#1565C0", "#e67e22", "#2ecc71", "#e74c3c",
+                "#9b59b6", "#f39c12", "#95a5a6",
+            ]
+            fig_dist = go.Figure()
+            for i, col in enumerate(pivot.columns):
+                fig_dist.add_trace(go.Bar(
+                    x=x_labels,
+                    y=pivot[col],
+                    name=col,
+                    marker_color=dist_colors[i % len(dist_colors)],
+                    hovertemplate=f"<b>{col}</b><br>" + "%{x}: $%{y:,.0f}<extra></extra>",
+                ))
+            fig_dist.update_layout(
+                **_base_layout(title="Annual Domestic Box Office by Studio"),
+                barmode="stack",
+                yaxis_title="Total Gross ($)",
+                yaxis_tickformat="$,.0s",
+                height=500,
+                legend=dict(
+                    orientation="h", yanchor="top", y=-0.10,
+                    xanchor="center", x=0.5, font=dict(size=12),
+                ),
+                margin=dict(b=80),
+            )
+            st.plotly_chart(fig_dist, width="stretch")
+            add_export_figure("Annual BO by Studio", fig_dist)
+        else:
+            st.info("Historical distributor data unavailable.")
     else:
         st.warning("Weekly box office chart data unavailable.")
 
