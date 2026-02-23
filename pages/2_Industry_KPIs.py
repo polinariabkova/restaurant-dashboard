@@ -422,29 +422,30 @@ elif cfg["name"] == "Movie Theaters":
     st.caption("Live data from The Numbers · Updates daily · FRED pricing & employment data")
 
     # ── Sidebar ───────────────────────────────────────────────────────────
+    current_year = pd.Timestamp.now().year
+    py_options = [current_year - 1, current_year - 2, current_year - 3, 2019]
+    # Deduplicate while preserving order
+    py_options = list(dict.fromkeys(py_options))
+
     with st.sidebar:
         st.header("Settings")
         bo_compare_year = st.selectbox(
-            "Compare current year to",
-            [2025, 2024, 2023, 2019],
+            "Prior Year (PY)",
+            py_options,
             index=0,
             format_func=lambda y: f"{y}" + (" (pre-COVID)" if y == 2019 else ""),
         )
         start_year = st.slider("FRED History Start Year", 2010, 2022, 2015)
         start_date = f"{start_year}-01-01"
 
-    current_year = pd.Timestamp.now().year
-
     # ── Fetch box office data ─────────────────────────────────────────────
     with st.spinner("Fetching box office data (may be slow on first load)…"):
         weekly_chart_df = get_weekly_box_office()
         # 52-week rolling data (current + prior year combined)
         weekly_52w = get_weekly_box_office_52w()
-        # Current + compare year for YoY
+        # Current + PY for YoY
         weekly_trend_current = get_weekly_box_office_trend(current_year)
         weekly_trend_prior = get_weekly_box_office_trend(bo_compare_year)
-        # Also fetch 2025 if compare != 2025
-        weekly_trend_2025 = get_weekly_box_office_trend(2025) if bo_compare_year != 2025 else pd.DataFrame()
         annual_df = get_annual_box_office()
         release_df = get_release_schedule()
 
@@ -454,21 +455,9 @@ elif cfg["name"] == "Movie Theaters":
 
     today = pd.Timestamp.now().normalize()
 
-    # Combine all available weekly data into one frame for metric computation
-    _all_frames = []
-    for _df in [weekly_trend_current, weekly_trend_2025, weekly_trend_prior]:
-        if not _df.empty:
-            _all_frames.append(_df)
-    if _all_frames:
-        combined_weekly = pd.concat(_all_frames, ignore_index=True)
-        combined_weekly = combined_weekly.drop_duplicates(subset=["weekend_date"]).sort_values("weekend_date")
-    else:
-        combined_weekly = pd.DataFrame()
-
-    # Current year data
-    cy_data = combined_weekly[combined_weekly["weekend_date"].dt.year == current_year] if not combined_weekly.empty else pd.DataFrame()
-    # Prior year data
-    py_data = combined_weekly[combined_weekly["weekend_date"].dt.year == bo_compare_year] if not combined_weekly.empty else pd.DataFrame()
+    # Current year & prior year data for metrics
+    cy_data = weekly_trend_current if not weekly_trend_current.empty else pd.DataFrame()
+    py_data = weekly_trend_prior if not weekly_trend_prior.empty else pd.DataFrame()
 
     # Compute WTD, MTD, YTD
     def _period_total(df, start_date):
@@ -503,15 +492,11 @@ elif cfg["name"] == "Movie Theaters":
     latest_wk_gross = None
     latest_wk_date = ""
     prev_wk_gross = None
-    no1_movie = ""
-    no1_gross = None
 
     if not cy_data.empty:
         latest = cy_data.iloc[-1]
         latest_wk_gross = latest.get("combined_gross")
         latest_wk_date = latest["weekend_date"].strftime("%b %d") if pd.notna(latest.get("weekend_date")) else ""
-        no1_movie = latest.get("no1_movie", "")
-        no1_gross = latest.get("no1_gross")
         if len(cy_data) > 1:
             prev_wk_gross = cy_data.iloc[-2].get("combined_gross")
 
@@ -534,7 +519,7 @@ elif cfg["name"] == "Movie Theaters":
         mtd_delta = None
         if mtd_py > 0:
             mtd_pct = (mtd_cy / mtd_py - 1) * 100
-            mtd_delta = f"{mtd_pct:+.1f}% vs {bo_compare_year}"
+            mtd_delta = f"{mtd_pct:+.1f}% vs PY"
         c2.metric(
             f"MTD ({today.strftime('%B')})",
             f"${mtd_cy:,.0f}",
@@ -546,23 +531,36 @@ elif cfg["name"] == "Movie Theaters":
         ytd_delta = None
         if ytd_py > 0:
             ytd_pct = (ytd_cy / ytd_py - 1) * 100
-            ytd_delta = f"{ytd_pct:+.1f}% vs {bo_compare_year}"
+            ytd_delta = f"{ytd_pct:+.1f}% vs PY"
         c3.metric("YTD Box Office", f"${ytd_cy:,.0f}", delta=ytd_delta, delta_color="normal")
         add_export_metric("YTD BO", f"${ytd_cy:,.0f}", ytd_delta or "")
 
-    # Row 2: Avg ticket price + #1 movie
-    c5, c6 = st.columns([1, 2])
-
+    # Row 2: Avg ticket price
     if not annual_df.empty:
         latest_year = annual_df.iloc[0]
         yr_label = int(latest_year["Year"]) if "Year" in latest_year.index else ""
         if latest_year.get("Avg Ticket Price"):
-            c5.metric(f"Avg Ticket Price ({yr_label})" if yr_label else "Avg Ticket Price",
-                      f"${latest_year['Avg Ticket Price']:.2f}")
+            c4_col, _ = st.columns([1, 3])
+            c4_col.metric(
+                f"Avg Ticket Price ({yr_label})" if yr_label else "Avg Ticket Price",
+                f"${latest_year['Avg Ticket Price']:.2f}",
+            )
 
-    if no1_movie:
-        gross_txt = f" — ${no1_gross:,.0f} weekend" if no1_gross else ""
-        c6.info(f"**#1 Movie:** {no1_movie}{gross_txt}")
+    # Top 5 movies this weekend
+    if not weekly_chart_df.empty:
+        top5 = weekly_chart_df.head(5).copy()
+        st.markdown("**Top 5 Movies This Weekend**")
+        top5_display = []
+        for _, row in top5.iterrows():
+            top5_display.append({
+                "#": int(row["Rank"]) if pd.notna(row.get("Rank")) else "",
+                "Movie": row.get("Title", ""),
+                "Distributor": row.get("Distributor", ""),
+                "Weekend Gross": f"${row['Gross']:,.0f}" if pd.notna(row.get("Gross")) and row["Gross"] else "N/A",
+                "Total Gross": f"${row['Total Gross']:,.0f}" if pd.notna(row.get("Total Gross")) and row["Total Gross"] else "N/A",
+                "Theaters": f"{row['Theaters']:,}" if pd.notna(row.get("Theaters")) and row["Theaters"] else "N/A",
+            })
+        st.dataframe(pd.DataFrame(top5_display), width="stretch", hide_index=True)
 
     st.divider()
 
@@ -638,13 +636,13 @@ elif cfg["name"] == "Movie Theaters":
         )
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 2B: WEEKLY BOX OFFICE — YoY TRACKING + #1 MOVIE
+    # SECTION 2B: WEEKLY BOX OFFICE — CY vs PY TRACKING
     # ══════════════════════════════════════════════════════════════════════
-    st.subheader("Weekly Box Office — YoY Tracking")
+    st.subheader("Weekly Box Office — CY vs PY")
 
     if not weekly_trend_prior.empty:
-        # Build full 52-week comparison using the prior year as the backbone.
-        # Current year data is overlaid for weeks that have happened so far.
+        # Build full 52-week comparison using PY as backbone.
+        # CY data overlaid for weeks reported so far.
         prior_wk = weekly_trend_prior.head(52).copy()
         prior_wk["week_num"] = range(1, len(prior_wk) + 1)
 
@@ -652,15 +650,15 @@ elif cfg["name"] == "Movie Theaters":
         if not current_wk.empty:
             current_wk["week_num"] = range(1, len(current_wk) + 1)
 
-        # Start from the full prior-year schedule (all 52 weeks)
+        # PY as the 52-week scaffold
         comp_df = prior_wk[["week_num", "weekend_date", "no1_movie", "combined_gross"]].copy()
         comp_df.rename(columns={
-            "weekend_date": "prior_weekend_date",
-            "no1_movie": "prior_movie",
-            "combined_gross": "prior_gross",
+            "weekend_date": "py_weekend_date",
+            "no1_movie": "py_movie",
+            "combined_gross": "py_gross",
         }, inplace=True)
 
-        # Merge current year by week_num
+        # Merge CY by week_num
         if not current_wk.empty:
             cy_cols = current_wk[["week_num", "weekend_date", "no1_movie", "combined_gross"]].copy()
             cy_cols.rename(columns={
@@ -674,88 +672,62 @@ elif cfg["name"] == "Movie Theaters":
             comp_df["cy_movie"] = None
             comp_df["cy_gross"] = np.nan
 
-        # Also merge 2025 data if compare year is not 2025
-        if bo_compare_year != 2025 and not weekly_trend_2025.empty:
-            wk_2025 = weekly_trend_2025.head(52).copy()
-            wk_2025["week_num"] = range(1, len(wk_2025) + 1)
-            cols_2025 = wk_2025[["week_num", "combined_gross", "no1_movie"]].copy()
-            cols_2025.rename(columns={
-                "combined_gross": "gross_2025",
-                "no1_movie": "movie_2025",
-            }, inplace=True)
-            comp_df = comp_df.merge(cols_2025, on="week_num", how="left")
-
         # YoY %
         comp_df["yoy_pct"] = np.where(
-            (comp_df["cy_gross"].notna()) & (comp_df["prior_gross"] > 0),
-            (comp_df["cy_gross"] / comp_df["prior_gross"] - 1) * 100,
+            (comp_df["cy_gross"].notna()) & (comp_df["py_gross"] > 0),
+            (comp_df["cy_gross"] / comp_df["py_gross"] - 1) * 100,
             np.nan,
         )
 
-        # Use current-year date where available, else shift prior-year date forward
+        # Display date: CY date where available, else shift PY date forward
+        year_offset = current_year - bo_compare_year
         comp_df["display_date"] = comp_df["cy_weekend_date"].fillna(
-            comp_df["prior_weekend_date"] + pd.DateOffset(years=current_year - bo_compare_year)
+            comp_df["py_weekend_date"] + pd.DateOffset(years=year_offset)
         )
 
         n_cy_weeks = int(comp_df["cy_gross"].notna().sum())
         st.caption(
-            f"Full 52-week comparison: {current_year} vs {bo_compare_year}"
-            + (f" vs 2025" if bo_compare_year != 2025 and "gross_2025" in comp_df.columns else "")
-            + f" | {n_cy_weeks} of 52 weeks reported for {current_year}"
+            f"CY = {current_year} | PY = {bo_compare_year} | "
+            f"{n_cy_weeks} of 52 weeks reported"
         )
 
-        # Dual-axis chart: bars = current BO, lines = prior years, YoY %
+        # Dual-axis chart: bars = CY BO, line = PY BO, line = YoY %
         from plotly.subplots import make_subplots
         fig_yoy = make_subplots(specs=[[{"secondary_y": True}]])
 
-        # Current year bars (only where data exists)
         cy_mask = comp_df["cy_gross"].notna()
         fig_yoy.add_trace(
             go.Bar(
                 x=comp_df.loc[cy_mask, "display_date"],
                 y=comp_df.loc[cy_mask, "cy_gross"],
-                name=f"{current_year} Weekend BO",
+                name="CY Weekend BO",
                 marker_color="#1565C0",
-                hovertemplate="<b>%{x|%b %d, %Y}</b><br>BO: $%{y:,.0f}<extra></extra>",
+                hovertemplate="<b>%{x|%b %d, %Y}</b><br>CY: $%{y:,.0f}<extra></extra>",
             ),
             secondary_y=False,
         )
-        # Prior year line (full 52 weeks)
         fig_yoy.add_trace(
             go.Scatter(
                 x=comp_df["display_date"],
-                y=comp_df["prior_gross"],
-                name=f"{bo_compare_year} Weekend BO",
+                y=comp_df["py_gross"],
+                name="PY Weekend BO",
                 line=dict(color="#e67e22", width=2, dash="dot"),
-                hovertemplate=f"{bo_compare_year}" + ": $%{y:,.0f}<extra></extra>",
+                hovertemplate="PY: $%{y:,.0f}<extra></extra>",
             ),
             secondary_y=False,
         )
-        # Add 2025 overlay if not already the comparison year
-        if "gross_2025" in comp_df.columns:
-            fig_yoy.add_trace(
-                go.Scatter(
-                    x=comp_df["display_date"],
-                    y=comp_df["gross_2025"],
-                    name="2025 Weekend BO",
-                    line=dict(color="#9b59b6", width=2, dash="dash"),
-                    hovertemplate="2025: $%{y:,.0f}<extra></extra>",
-                ),
-                secondary_y=False,
-            )
-        # YoY % line (only where current year data exists)
         fig_yoy.add_trace(
             go.Scatter(
                 x=comp_df.loc[cy_mask, "display_date"],
                 y=comp_df.loc[cy_mask, "yoy_pct"],
-                name=f"YoY % vs {bo_compare_year}",
+                name="YoY %",
                 line=dict(color="#2ecc71", width=2.5),
                 hovertemplate="YoY: %{y:+.1f}%<extra></extra>",
             ),
             secondary_y=True,
         )
-        # Vertical line separating reported vs upcoming weeks
-        if n_cy_weeks > 0 and n_cy_weeks < len(comp_df):
+        # Vertical divider between reported and upcoming
+        if 0 < n_cy_weeks < len(comp_df):
             last_reported = comp_df.loc[cy_mask, "display_date"].iloc[-1]
             fig_yoy.add_vline(
                 x=last_reported.timestamp() * 1000,
@@ -764,7 +736,7 @@ elif cfg["name"] == "Movie Theaters":
             )
         fig_yoy.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1, secondary_y=True)
         fig_yoy.update_layout(
-            **_base_layout(title=f"Weekly BO: {current_year} vs {bo_compare_year} — Full Year"),
+            **_base_layout(title=f"Weekly BO — CY vs PY (Full Year)"),
             height=460,
             legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
         )
@@ -777,24 +749,18 @@ elif cfg["name"] == "Movie Theaters":
         detail_rows = []
         for _, row in comp_df.iterrows():
             has_cy = pd.notna(row.get("cy_gross"))
-            r = {
-                "Wk #": int(row["week_num"]),
+            detail_rows.append({
+                "Wk": int(row["week_num"]),
                 "Weekend": row["display_date"].strftime("%b %d, %Y") if pd.notna(row.get("display_date")) else "",
-                f"{current_year} BO": f"${row['cy_gross']:,.0f}" if has_cy else "",
-                f"{bo_compare_year} BO": f"${row['prior_gross']:,.0f}" if row["prior_gross"] else "N/A",
-                f"YoY % vs {bo_compare_year}": round(row["yoy_pct"], 1) if pd.notna(row.get("yoy_pct")) else None,
-                f"#1 Movie ({current_year})": row.get("cy_movie", "") if has_cy else "",
-                f"#1 Movie ({bo_compare_year})": row.get("prior_movie", ""),
-            }
-            # Add 2025 columns if applicable
-            if bo_compare_year != 2025 and "gross_2025" in comp_df.columns:
-                r["2025 BO"] = f"${row['gross_2025']:,.0f}" if pd.notna(row.get("gross_2025")) else ""
-                r["#1 Movie (2025)"] = row.get("movie_2025", "") if pd.notna(row.get("movie_2025")) else ""
-            detail_rows.append(r)
+                "CY BO": f"${row['cy_gross']:,.0f}" if has_cy else "",
+                "PY BO": f"${row['py_gross']:,.0f}" if row["py_gross"] else "N/A",
+                "YoY %": round(row["yoy_pct"], 1) if pd.notna(row.get("yoy_pct")) else None,
+                "#1 (CY)": row.get("cy_movie", "") if has_cy else "",
+                "#1 (PY)": row.get("py_movie", ""),
+            })
 
         if detail_rows:
             detail_df = pd.DataFrame(detail_rows)
-            yoy_col = f"YoY % vs {bo_compare_year}"
 
             def _color_yoy(val):
                 if isinstance(val, (int, float)):
@@ -802,21 +768,21 @@ elif cfg["name"] == "Movie Theaters":
                 return ""
 
             def _dim_future(row):
-                """Gray out rows where current year data hasn't arrived yet."""
-                if row[f"{current_year} BO"] == "":
+                """Gray out rows where CY data hasn't arrived yet."""
+                if row["CY BO"] == "":
                     return ["color: #aaa"] * len(row)
                 return [""] * len(row)
 
             styled = (
                 detail_df.style
                     .apply(_dim_future, axis=1)
-                    .map(_color_yoy, subset=[yoy_col])
-                    .format({yoy_col: lambda v: f"{v:+.1f}%" if v is not None and pd.notna(v) else ""})
+                    .map(_color_yoy, subset=["YoY %"])
+                    .format({"YoY %": lambda v: f"{v:+.1f}%" if v is not None and pd.notna(v) else ""})
             )
             st.dataframe(styled, width="stretch", height=700, hide_index=True)
 
     elif not weekly_trend_current.empty:
-        st.info(f"Comparison data for {bo_compare_year} not available.")
+        st.info(f"PY ({bo_compare_year}) data not available.")
     else:
         st.warning("Weekly trend data unavailable.")
 
@@ -982,7 +948,9 @@ elif cfg["name"] == "Movie Theaters":
     st.subheader("YTD Box Office Pacing")
     st.caption("Cumulative weekend BO by week number — compare recovery trajectory")
 
-    years_to_compare = [current_year, 2025, 2024, 2019]
+    years_to_compare = list(dict.fromkeys([
+        current_year, current_year - 1, current_year - 2, 2019,
+    ]))
     years_data = {}
     for yr in years_to_compare:
         if yr == current_year:
