@@ -162,25 +162,36 @@ if cfg["has_sss"]:
         st.subheader("Traffic vs. Average Ticket Contribution (ppts)")
         st.caption("Only companies that disclose this breakdown are shown.")
 
-        # Build a shared quarter list so every chart has the same x-axis
-        tt_quarters_set: set = set()
+        # Build per-ticker valid data, then find the INTERSECTION of quarters
+        # so every chart shows the exact same range
         tt_valid_data: dict = {}
+        per_ticker_quarters: list[set] = []
         for t in tt_candidates:
             t_df = pd.DataFrame(SSS_DATA[t])
             t_df = t_df[t_df["quarter"].isin(q_list)]
             valid = t_df.dropna(subset=["traffic", "ticket"])
             if not valid.empty:
                 tt_valid_data[t] = valid
-                tt_quarters_set.update(valid["quarter"].tolist())
+                per_ticker_quarters.append(set(valid["quarter"].tolist()))
 
-        # Sort quarters chronologically using the same key used elsewhere
-        shared_quarters = sorted(tt_quarters_set, key=quarter_key)
+        if per_ticker_quarters:
+            # Use the intersection so all charts cover the same quarters
+            common_quarters = per_ticker_quarters[0]
+            for qs in per_ticker_quarters[1:]:
+                common_quarters = common_quarters & qs
+            shared_quarters = sorted(common_quarters, key=quarter_key)
+        else:
+            shared_quarters = []
 
+        # Filter each ticker's data to only the shared quarters
         cols = st.columns(min(len(tt_valid_data), 2))
         for i, (t, valid) in enumerate(tt_valid_data.items()):
+            filtered = valid[valid["quarter"].isin(shared_quarters)]
+            if filtered.empty:
+                continue
             with cols[i % 2]:
                 st.plotly_chart(
-                    traffic_ticket_chart(valid, t, COMPANIES[t]["color"], quarters=shared_quarters),
+                    traffic_ticket_chart(filtered, t, COMPANIES[t]["color"], quarters=shared_quarters),
                     width="stretch",
                 )
 
