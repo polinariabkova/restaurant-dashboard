@@ -161,16 +161,26 @@ if cfg["has_sss"]:
     if tt_candidates:
         st.subheader("Traffic vs. Average Ticket Contribution (ppts)")
         st.caption("Only companies that disclose this breakdown are shown.")
-        cols = st.columns(min(len(tt_candidates), 2))
-        for i, t in enumerate(tt_candidates):
+
+        # Build a shared quarter list so every chart has the same x-axis
+        tt_quarters_set: set = set()
+        tt_valid_data: dict = {}
+        for t in tt_candidates:
             t_df = pd.DataFrame(SSS_DATA[t])
             t_df = t_df[t_df["quarter"].isin(q_list)]
             valid = t_df.dropna(subset=["traffic", "ticket"])
-            if valid.empty:
-                continue
+            if not valid.empty:
+                tt_valid_data[t] = valid
+                tt_quarters_set.update(valid["quarter"].tolist())
+
+        # Sort quarters chronologically using the same key used elsewhere
+        shared_quarters = sorted(tt_quarters_set, key=quarter_key)
+
+        cols = st.columns(min(len(tt_valid_data), 2))
+        for i, (t, valid) in enumerate(tt_valid_data.items()):
             with cols[i % 2]:
                 st.plotly_chart(
-                    traffic_ticket_chart(valid, t, COMPANIES[t]["color"]),
+                    traffic_ticket_chart(valid, t, COMPANIES[t]["color"], quarters=shared_quarters),
                     width="stretch",
                 )
 

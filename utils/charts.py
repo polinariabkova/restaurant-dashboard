@@ -216,8 +216,14 @@ def sss_line_chart(df: pd.DataFrame, colors: dict, title: str = "SSS Trend") -> 
     return fig
 
 
-def traffic_ticket_chart(df: pd.DataFrame, ticker: str, color: str) -> go.Figure:
-    """Stacked bar: traffic vs. ticket contribution to SSS."""
+def traffic_ticket_chart(
+    df: pd.DataFrame, ticker: str, color: str,
+    quarters: list | None = None,
+) -> go.Figure:
+    """Stacked bar: traffic vs. ticket contribution to SSS.
+    If *quarters* is provided, the x-axis is locked to that list so all
+    charts share the same range regardless of per-ticker data availability.
+    """
     valid = df.dropna(subset=["traffic", "ticket"])
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -229,12 +235,19 @@ def traffic_ticket_chart(df: pd.DataFrame, ticker: str, color: str) -> go.Figure
         name="Avg Ticket", marker_color="#95a5a6",
     ))
     fig.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1, opacity=0.6)
-    fig.update_layout(
+    layout_kw = {
         **_base_layout(title=f"{ticker} – Traffic vs. Ticket (ppts)"),
-        barmode="stack",
-        yaxis_title="ppts",
-        height=360,
-    )
+        "barmode": "stack",
+        "yaxis_title": "ppts",
+        "height": 360,
+    }
+    if quarters:
+        layout_kw["xaxis"] = dict(
+            categoryorder="array",
+            categoryarray=quarters,
+            type="category",
+        )
+    fig.update_layout(**layout_kw)
     return fig
 
 
