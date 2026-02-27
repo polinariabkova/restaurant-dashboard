@@ -619,11 +619,14 @@ def get_annual_distributor_share(year: int) -> pd.DataFrame:
         soup = BeautifulSoup(html, "lxml")
         tables = soup.find_all("table")
 
-        # Find the distributor table — it has "Distributor" in header
+        # Find the distributor *summary* table — has both "Distributor" and "Share" in header
         table = None
         for t in tables:
             first_row = t.find("tr")
-            if first_row and "distributor" in first_row.text.lower():
+            if not first_row:
+                continue
+            hdr = first_row.text.lower()
+            if "distributor" in hdr and "share" in hdr:
                 table = t
                 break
         if not table and len(tables) >= 4:
@@ -631,22 +634,31 @@ def get_annual_distributor_share(year: int) -> pd.DataFrame:
         if not table:
             return pd.DataFrame()
 
+        # Detect column layout from header row
+        header_cells = [th.text.strip().lower() for th in table.find("tr").find_all(["th", "td"])]
+        dist_idx = next((i for i, h in enumerate(header_cells) if "distributor" in h), 0)
+        movies_idx = next((i for i, h in enumerate(header_cells) if "movies" in h), dist_idx + 1)
+        gross_idx = next((i for i, h in enumerate(header_cells) if "gross" in h), movies_idx + 1)
+        share_idx = next((i for i, h in enumerate(header_cells) if "share" in h), gross_idx + 1)
+        max_idx = max(dist_idx, movies_idx, gross_idx, share_idx)
+
         rows = []
         for tr in table.find_all("tr")[1:]:
             cells = [td.text.strip() for td in tr.find_all("td")]
-            if len(cells) < 4:
+            if len(cells) <= max_idx:
                 continue
-            distributor = cells[0].strip()
+            distributor = cells[dist_idx].strip()
             if not distributor or distributor.lower() in ("total", ""):
                 continue
             rows.append({
                 "Distributor": distributor,
-                "Movies": _parse_int(cells[1]),
-                "Total Gross": _parse_money(cells[2]),
-                "Market Share": cells[3].strip().replace("%", ""),
+                "Movies": _parse_int(cells[movies_idx]),
+                "Total Gross": _parse_money(cells[gross_idx]),
+                "Market Share": cells[share_idx].strip().replace("%", ""),
             })
         df = pd.DataFrame(rows)
         if not df.empty:
+            df["Total Gross"] = pd.to_numeric(df["Total Gross"], errors="coerce")
             df["Market Share"] = pd.to_numeric(df["Market Share"], errors="coerce")
             df["Year"] = year
         return df
@@ -665,6 +677,140 @@ def get_distributor_share_multi_year(years: list[int]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+# ── Year top movies + budgets (The Numbers) ──────────────────────────────
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_year_top_movies(year: int) -> pd.DataFrame:
+    """
+    Scrape top grossing movies for a given year from The Numbers.
+    Returns DataFrame with: Movie, Release Date, Distributor, Genre, Gross, Tickets Sold.
+    """
+    from bs4 import BeautifulSoup
+
+    html = _fetch_numbers_page(f"https://www.the-numbers.com/market/{year}/top-grossing-movies")
+    if not html:
+        return pd.DataFrame()
+
+    try:
+        soup = BeautifulSoup(html, "lxml")
+        table = soup.find("table")
+        if not table:
+            return pd.DataFrame()
+
+        rows = []
+        for tr in table.find_all("tr")[1:]:
+            cells = tr.find_all("td")
+            if len(cells) < 7:
+                continue
+            rows.append({
+                "Rank": _parse_int(cells[0].text) or 0,
+                "Movie": cells[1].text.strip(),
+                "Release Date": cells[2].text.strip(),
+                "Distributor": cells[3].text.strip(),
+                "Genre": cells[4].text.strip(),
+                "Gross": _parse_money(cells[5].text),
+                "Tickets Sold": _parse_int(cells[6].text),
+            })
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            df["Gross"] = pd.to_numeric(df["Gross"], errors="coerce")
+            df["Release Date"] = pd.to_datetime(df["Release Date"], format="mixed", errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_movie_budgets(limit: int = 200) -> pd.DataFrame:
+    """
+    Scrape movie budgets from The Numbers /movie/budgets/all.
+    Returns DataFrame with: Movie, Release Date, Production Budget, Domestic Gross, Worldwide Gross.
+    """
+    from bs4 import BeautifulSoup
+
+    html = _fetch_numbers_page("https://www.the-numbers.com/movie/budgets/all")
+    if not html:
+        return pd.DataFrame()
+
+    try:
+        soup = BeautifulSoup(html, "lxml")
+        table = soup.find("table")
+        if not table:
+            return pd.DataFrame()
+
+        rows = []
+        for tr in table.find_all("tr")[1:limit + 1]:
+            cells = tr.find_all("td")
+            if len(cells) < 6:
+                continue
+            rows.append({
+                "Release Date": cells[1].text.strip(),
+                "Movie": cells[2].text.strip(),
+                "Production Budget": _parse_money(cells[3].text),
+                "Domestic Gross": _parse_money(cells[4].text),
+                "Worldwide Gross": _parse_money(cells[5].text),
+            })
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            for col in ["Production Budget", "Domestic Gross", "Worldwide Gross"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df["Release Date"] = pd.to_datetime(df["Release Date"], format="mixed", errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_biggest_openings(year: int) -> pd.DataFrame:
+    """
+    Scrape biggest opening weekends for a year from The Numbers /market/{year}/summary.
+    Returns DataFrame with: Movie, Weekend Date, Opening Gross, Theaters, Distributor.
+    """
+    from bs4 import BeautifulSoup
+
+    html = _fetch_numbers_page(f"https://www.the-numbers.com/market/{year}/summary")
+    if not html:
+        return pd.DataFrame()
+
+    try:
+        soup = BeautifulSoup(html, "lxml")
+        tables = soup.find_all("table")
+
+        # Find the "Biggest Weekends" table
+        target = None
+        for t in tables:
+            header_row = t.find("tr")
+            if header_row and "weekend" in header_row.text.lower() and "movie" in header_row.text.lower():
+                # Check it's the one with individual movie weekends, not the combined table
+                cells = header_row.find_all(["th", "td"])
+                header_text = " ".join(c.text.lower() for c in cells)
+                if "theater" in header_text:
+                    target = t
+                    break
+        if not target:
+            return pd.DataFrame()
+
+        rows = []
+        for tr in target.find_all("tr")[1:]:
+            cells = tr.find_all("td")
+            if len(cells) < 6:
+                continue
+            rows.append({
+                "Weekend Date": cells[1].text.strip(),
+                "Movie": cells[2].text.strip(),
+                "Opening Gross": _parse_money(cells[3].text),
+                "Theaters": _parse_int(cells[4].text),
+                "Distributor": cells[5].text.strip(),
+            })
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            df["Opening Gross"] = pd.to_numeric(df["Opening Gross"], errors="coerce")
+            df["Weekend Date"] = pd.to_datetime(df["Weekend Date"], format="mixed", errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 # ── Gaming company financials (stockanalysis.com) ─────────────────────────
@@ -1292,3 +1438,132 @@ def get_company_quarterly_financials(tickers: list) -> pd.DataFrame:
     if not df.empty:
         df = df.dropna(subset=["Quarter"]).sort_values(["Ticker", "Quarter"])
     return df
+
+
+# ── LVCVA Las Vegas tourism data ──────────────────────────────────────────
+
+# URLs for LVCVA Year-End Summary Excel files (2019–2025)
+_LVCVA_URLS = {
+    2025: "https://assets.simpleviewcms.com/simpleview/raw/upload/v1/clients/lasvegas/Year_to_Date_Summary_for_2025_a3eca74d-4e08-4cef-9aac-9c22a8dad52d.xlsx",
+    2024: "https://assets.simpleviewcms.com/simpleview/raw/upload/v1/clients/lasvegas/Year_to_Date_Summary_for_2024_0d625f44-ecbe-4fc2-917b-a2e6b3c794d3.xlsx",
+    2023: "https://assets.simpleviewcms.com/simpleview/raw/upload/v1/clients/lasvegas/Year_to_Date_Summary_for_2023_Revised_770fdfda-2ef5-4b3a-ba37-c0e8dbb0384b.xlsx",
+    2022: "https://assets.simpleviewcms.com/simpleview/raw/upload/v1/clients/lasvegas/Year_to_Date_Summary_for_2022_4ae9840a-74b0-42c5-ba75-830b8b627eb6.xlsx",
+    2021: "https://assets.simpleviewcms.com/simpleview/raw/upload/v1/clients/lasvegas/Year_to_Date_Summary_for_2021_a1ff5525-76ca-4035-862e-4a8880fa52d8.xlsx",
+    2020: "https://assets.simpleviewcms.com/simpleview/raw/upload/v1/clients/lasvegas/Year_to_Date_Summary_for_2020_Revised_07091dbc-5d2d-4c9c-8e07-03e9afca118e.xlsx",
+    2019: "https://assets.simpleviewcms.com/simpleview/raw/upload/v1/clients/lasvegas/Year_End_Summary_for_2019_Revised_55959cc8-b556-4835-90da-c1d2d05c5332.xlsx",
+}
+
+# Row-label → output column mapping for the LVCVA Excel files
+_LVCVA_ROW_MAP = {
+    "Visitor Volume":                   "Visitor Volume",
+    "Convention Attendance":            "Convention Attendance",
+    "Total Occupancy":                  "Total Occupancy",
+    "Strip Occupancy":                  "Strip Occupancy",
+    "Downtown Occupancy":               "Downtown Occupancy",
+    "Weekend Occupancy":                "Weekend Occupancy",
+    "Midweek Occupancy":                "Midweek Occupancy",
+    "Average Daily Room Rate (ADR)":    "ADR",
+    "Strip ADR":                        "Strip ADR",
+    "Downtown ADR":                     "Downtown ADR",
+    "Revenue Per Available Room (RevPAR)": "RevPAR",
+    "Strip RevPAR":                     "Strip RevPAR",
+    "Downtown RevPAR":                  "Downtown RevPAR",
+    "Total Room Nights Occupied":       "Room Nights",
+    "Total En/Deplaned Passengers":     "Airport Passengers",
+    "Gaming Revenue : Clark County":    "Clark County GGR",
+    "Gaming Revenue: Clark County":     "Clark County GGR",
+    "Gaming Revenue: Las Vegas Strip":  "Strip GGR",
+    "Gaming Revenue: Downtown":         "Downtown GGR",
+    "Gaming Revenue: Boulder Strip":    "Boulder Strip GGR",
+    "Available Room Inventory":         "Room Inventory",
+}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_lvcva_vegas_data() -> pd.DataFrame:
+    """
+    Download and parse LVCVA Year-End Summary Excel files (2019-2025).
+    Returns a DataFrame indexed by month with columns for each metric.
+    """
+    import requests, io, numpy as np
+
+    all_data = {}  # {(year, month): {metric: value}}
+
+    for year, url in _LVCVA_URLS.items():
+        try:
+            r = requests.get(url, timeout=30)
+            if r.status_code != 200:
+                continue
+            xls = pd.ExcelFile(io.BytesIO(r.content))
+            # First sheet is always Las Vegas
+            sheet_name = [s for s in xls.sheet_names if "Las Vegas" in s or "LV" in s]
+            if not sheet_name:
+                sheet_name = [xls.sheet_names[0]]
+            df = pd.read_excel(xls, sheet_name=sheet_name[0], header=None)
+
+            # Find header row (exact label "Tourism Indicators", not the title row)
+            header_row = None
+            for i in range(min(10, len(df))):
+                cell = df.iloc[i, 0]
+                if pd.notna(cell) and str(cell).strip() == "Tourism Indicators":
+                    header_row = i
+                    break
+            if header_row is None:
+                continue
+
+            # Extract month columns (every other column starting from col 1)
+            month_cols = {}
+            for c in range(1, len(df.columns)):
+                val = df.iloc[header_row, c]
+                if pd.notna(val):
+                    try:
+                        dt = pd.to_datetime(val)
+                        month_cols[c] = dt
+                    except Exception:
+                        pass
+
+            # Find the "Change from Previous Year" row to stop before it
+            change_row = None
+            for i in range(header_row + 1, len(df)):
+                cell = df.iloc[i, 0]
+                if pd.notna(cell) and "Change from Previous Year" in str(cell):
+                    change_row = i
+                    break
+            max_row = change_row if change_row else len(df)
+
+            # Parse data rows
+            for i in range(header_row + 1, max_row):
+                raw_label = df.iloc[i, 0]
+                if pd.isna(raw_label):
+                    continue
+                label = str(raw_label).strip()
+                col_name = _LVCVA_ROW_MAP.get(label)
+                if not col_name:
+                    continue
+
+                for c, dt in month_cols.items():
+                    val = df.iloc[i, c]
+                    if pd.notna(val):
+                        try:
+                            val = float(val)
+                        except (ValueError, TypeError):
+                            continue
+                        key = (dt.year, dt.month)
+                        if key not in all_data:
+                            all_data[key] = {}
+                        all_data[key][col_name] = val
+
+        except Exception:
+            continue
+
+    if not all_data:
+        return pd.DataFrame()
+
+    rows = []
+    for (y, m), metrics in sorted(all_data.items()):
+        row = {"Date": pd.Timestamp(year=y, month=m, day=1)}
+        row.update(metrics)
+        rows.append(row)
+
+    result = pd.DataFrame(rows).set_index("Date").sort_index()
+    return result

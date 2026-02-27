@@ -6,6 +6,15 @@ CONFIG = {
     "name": "Paper & Packaging",
     "icon": "\U0001f4e6",  # package
 
+    "page_titles": {
+        "stocks":       "Stock Performance",
+        "kpis":         "Pricing & Capacity",
+        "market":       "Input Costs",
+        "fundamentals": "Fundamentals",
+        "macro":        "P&P Industry & Macro",
+        "news":         "P&P News",
+    },
+
     "companies": {
         # Containerboard & Corrugated
         "IP":      {"name": "International Paper",     "segment": "Containerboard",         "color": "#1B4F72"},

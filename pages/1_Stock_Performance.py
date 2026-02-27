@@ -13,10 +13,6 @@ from utils.industry_selector import render_industry_selector
 from utils.data_fetchers import get_prices, get_ohlcv, get_returns_table
 from utils.charts import normalized_price_chart, returns_heatmap, price_volume_chart
 from utils.style import inject_css
-from utils.export import (
-    reset_export_state, add_export_figure, add_export_table,
-    add_export_metric, render_export_sidebar,
-)
 
 st.set_page_config(page_title="Stock Performance", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "assets", "arini_logo.svg"))
@@ -25,8 +21,7 @@ inject_css()
 # ── Industry selector (very top) ─────────────────────────────────────────
 cfg = render_industry_selector()
 
-st.title("Stock Performance")
-reset_export_state()
+st.title(cfg.get("page_titles", {}).get("stocks", "Stock Performance"))
 COMPANIES = cfg["companies"]
 TICKERS = list(COMPANIES.keys())
 SEGMENTS = cfg["segments"]
@@ -156,13 +151,10 @@ if not ohlcv.empty:
     prev_close = ohlcv["Close"].iloc[-2] if len(ohlcv) > 1 else last_close
     info_cols = [
         ("Last Close",  f"${last_close:.2f}"),
-        ("1D Change",   f"{(last_close/prev_close - 1)*100:.2f}%"),
+        ("1D Change",   f"{(last_close/prev_close - 1)*100:.1f}%"),
         ("52W High",    f"${ohlcv['High'].max():.2f}"),
         ("52W Low",     f"${ohlcv['Low'].min():.2f}"),
         ("Avg Vol (30D)", f"{ohlcv['Volume'].tail(30).mean()/1e6:.1f}M"),
     ]
     for col, (label, val) in zip([c1, c2, c3, c4, c5], info_cols):
         col.metric(label, val)
-
-# ── Export sidebar ─────────────────────────────────────────────────────
-render_export_sidebar(cfg["name"])

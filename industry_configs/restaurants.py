@@ -6,6 +6,15 @@ CONFIG = {
     "name": "Restaurants",
     "icon": "\U0001f354",  # hamburger
 
+    "page_titles": {
+        "stocks":       "Stock Performance",
+        "kpis":         "Same-Store Sales",
+        "market":       "Input Costs",
+        "fundamentals": "Fundamentals",
+        "macro":        "Restaurant Industry & Macro",
+        "news":         "Restaurant News",
+    },
+
     "companies": {
         "MCD":  {"name": "McDonald's",             "segment": "QSR",           "color": "#FFC72C"},
         "YUM":  {"name": "Yum! Brands",            "segment": "QSR",           "color": "#E31837"},
@@ -60,6 +69,10 @@ CONFIG = {
         "Soybean Oil": "ZL=F",
         "Lean Cattle": "LE=F",
         "Lean Hogs":   "HE=F",
+        "Cheese":      "CB=F",
+        "Sugar":       "SB=F",
+        "Milk":        "DC=F",
+        "Cocoa":       "CC=F",
     },
 
     "commodity_units": {
@@ -69,6 +82,10 @@ CONFIG = {
         "Soybean Oil": "\u00a2/lb",
         "Lean Cattle": "\u00a2/lb",
         "Lean Hogs":   "\u00a2/lb",
+        "Cheese":      "\u00a2/lb",
+        "Sugar":       "\u00a2/lb",
+        "Milk":        "$/cwt",
+        "Cocoa":       "$/ton",
         "Beef":        "$/lb",
         "Chicken":     "$/lb",
     },
@@ -80,6 +97,10 @@ CONFIG = {
         "Soybean Oil": {"emoji": "\U0001fad8", "category": "Oils",      "color": "#A8B820"},
         "Lean Cattle": {"emoji": "\U0001f404", "category": "Beef",      "color": "#8B4513"},
         "Lean Hogs":   {"emoji": "\U0001f437", "category": "Pork",      "color": "#C1698A"},
+        "Cheese":      {"emoji": "\U0001f9c0", "category": "Dairy",     "color": "#F5C518"},
+        "Sugar":       {"emoji": "\U0001f36c", "category": "Sweeteners","color": "#E8E8E8"},
+        "Milk":        {"emoji": "\U0001f95b", "category": "Dairy",     "color": "#F0F0F0"},
+        "Cocoa":       {"emoji": "\U0001f36b", "category": "Beverages", "color": "#5C3317"},
         "Beef":        {"emoji": "\U0001f969", "category": "Beef",      "color": "#B22222"},
         "Chicken":     {"emoji": "\U0001f414", "category": "Chicken",   "color": "#DAA520"},
     },
@@ -133,6 +154,37 @@ CONFIG = {
             "and wing price volatility drives margin swings. YUM (KFC, Popeyes via QSR) "
             "is heavily exposed to bone-in and boneless chicken. CMG (chicken burritos/bowls), "
             "MCD (McNuggets, McChicken), and EAT (Chili's chicken) also affected."
+        ),
+        "Cheese": (
+            "Critical input across most restaurant operators. DPZ is the most exposed — "
+            "mozzarella cheese is ~35-40% of pizza COGS. YUM/Pizza Hut faces similar exposure. "
+            "MCD (cheeseburgers, Big Mac), WEN (burgers, Baconator), QSR/Burger King (Whopper), "
+            "CMG (queso, cheese toppings), EAT/Chili's (nachos, quesadillas, burgers), and "
+            "CAKE (cheesecakes, pasta dishes) are all meaningfully exposed. TXRH uses cheese "
+            "in sides and appetizers. CME block cheese futures (CB=F) track the benchmark price."
+        ),
+        "Sugar": (
+            "Key sweetener input across beverages, sauces, baked goods, and desserts. "
+            "SBUX is heavily exposed (syrups, frappuccinos, baked items). MCD (shakes, "
+            "McFlurry, sweet sauces, buns), DENN (pancake syrups, desserts), CAKE (cheesecakes, "
+            "desserts), and DPZ (pizza sauce) all carry meaningful exposure. High-fructose corn "
+            "syrup (linked to corn prices) is a partial substitute but raw sugar (SB=F) sets "
+            "the floor for sweetener costs industry-wide."
+        ),
+        "Milk": (
+            "CME Class III milk futures — benchmark for fluid milk and dairy ingredient costs. "
+            "SBUX is the most exposed operator (milk is the #1 ingredient in lattes, cappuccinos, "
+            "frappuccinos — estimated 8-10% of product COGS). MCD (shakes, McFlurry, breakfast), "
+            "SHAK (frozen custard, shakes), WEN (Frosty), DENN (pancakes, omelets, coffee drinks), "
+            "and DRI (cream sauces, desserts) are also affected. Milk prices tend to correlate "
+            "with cheese but can diverge on Class I vs. Class III dynamics."
+        ),
+        "Cocoa": (
+            "Chocolate and cocoa powder used in desserts, beverages, and sauces. SBUX has the "
+            "highest exposure (mochas, hot chocolate, chocolate-based frappuccinos). MCD (McFlurry, "
+            "shakes, cookies), CAKE (chocolate cheesecakes, dessert menu), and DENN (desserts) "
+            "are also exposed. Cocoa prices spiked 2-3x in 2024-25 due to West African crop "
+            "failures — a sustained headwind for any operator with a dessert/beverage skew."
         ),
     },
 

@@ -6,6 +6,15 @@ CONFIG = {
     "name": "Gaming",
     "icon": "\U0001f3b0",  # slot machine
 
+    "page_titles": {
+        "stocks":       "Stock Performance",
+        "kpis":         "Gaming KPIs",
+        "market":       "Las Vegas Market",
+        "fundamentals": "Fundamentals",
+        "macro":        "Gaming Industry & Macro",
+        "news":         "Gaming News",
+    },
+
     "companies": {
         # Destination Resorts
         "LVS":    {"name": "Las Vegas Sands",        "segment": "Destination Resorts",      "color": "#C0392B"},
@@ -61,6 +70,14 @@ CONFIG = {
     "commodity_futures": {},
     "commodity_units": {},
     "commodity_meta": {},
+
+    # Vegas-specific FRED series
+    "vegas_fred": {
+        "lv_lh_employment":    "LASV832LEIHN",          # Leisure & Hospitality Employment (LV MSA)
+        "lv_gambling_employment": "SMU32298207071320001SA",  # Gambling Industries Employment (LV MSA, SA)
+        "lv_unemployment":     "LASV832URN",             # Unemployment Rate (LV MSA)
+        "nv_gdp":              "NVRQGSP",                # Nevada Real GDP (Quarterly)
+    },
 
     # FRED PPI series for gaming input costs
     "input_cost_fred": {

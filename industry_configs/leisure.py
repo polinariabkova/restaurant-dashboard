@@ -6,6 +6,15 @@ CONFIG = {
     "name": "Leisure",
     "icon": "\U0001f3a1",  # ferris wheel
 
+    "page_titles": {
+        "stocks":       "Stock Performance",
+        "kpis":         "Travel & Leisure KPIs",
+        "market":       "Market Drivers",
+        "fundamentals": "Fundamentals",
+        "macro":        "Travel & Leisure Macro",
+        "news":         "Leisure News",
+    },
+
     "companies": {
         # Hotels & Lodging
         "MAR":    {"name": "Marriott International",   "segment": "Hotels & Lodging",       "color": "#A4123F"},

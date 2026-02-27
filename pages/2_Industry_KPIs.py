@@ -14,10 +14,6 @@ from utils.industry_selector import render_industry_selector
 from utils.data_fetchers import get_fred_series, fred_key_available
 from utils.charts import _base_layout
 from utils.style import inject_css
-from utils.export import (
-    reset_export_state, add_export_figure, add_export_table,
-    add_export_metric, render_export_sidebar,
-)
 
 st.set_page_config(page_title="Industry KPIs", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "assets", "arini_logo.svg"))
@@ -26,8 +22,7 @@ inject_css()
 # ── Industry selector (very top) ─────────────────────────────────────────
 cfg = render_industry_selector()
 
-st.title("Industry KPIs")
-reset_export_state()
+st.title(cfg.get("page_titles", {}).get("kpis", "Industry KPIs"))
 
 if cfg["has_sss"]:
     # ═══════════════════════════════════════════════════════════════════════
@@ -290,11 +285,9 @@ if cfg["has_sss"]:
                 barmode="relative",
             )
             st.plotly_chart(fig_spread, width="stretch")
-            add_export_figure("QSR vs Casual SSS Spread", fig_spread)
 
             with st.expander("Spread Data"):
                 st.dataframe(spread_df.set_index("Quarter"), width="stretch")
-                add_export_table("SSS Spread Data", spread_df.set_index("Quarter"))
         else:
             st.info("Insufficient data to compute QSR vs Casual spread.")
     else:
@@ -395,7 +388,6 @@ if cfg["has_sss"]:
                 legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
             )
             st.plotly_chart(fig_growth, width="stretch")
-            add_export_figure("Net New Restaurant Units", fig_growth)
 
             # Latest unit count table
             with st.expander("Current Unit Counts"):
@@ -414,7 +406,91 @@ if cfg["has_sss"]:
                     })
                 units_df = pd.DataFrame(latest_units).set_index("Ticker")
                 st.dataframe(units_df, width="stretch")
-                add_export_table("Restaurant Unit Counts", units_df)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # RESTAURANT — COMPANY QUARTERLY REVENUE COMPARISON
+    # ═══════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.subheader("Company Quarterly Revenue Comparison")
+    st.caption("Quarterly revenue from stockanalysis.com — top restaurant operators by sales")
+
+    from utils.data_fetchers import get_company_quarterly_financials
+    rest_rev_tickers = ["MCD", "SBUX", "CMG", "YUM", "DRI", "DPZ", "WEN", "TXRH"]
+    with st.spinner("Fetching restaurant company financials…"):
+        rest_fin_df = get_company_quarterly_financials(rest_rev_tickers)
+
+    if not rest_fin_df.empty:
+        rest_colors_map = {t: COMPANIES[t]["color"] for t in rest_rev_tickers if t in COMPANIES}
+        rest_fin_tickers = sorted(rest_fin_df["Ticker"].unique())
+
+        fig_rrev = go.Figure()
+        for tkr in rest_fin_tickers:
+            tkr_df = rest_fin_df[rest_fin_df["Ticker"] == tkr].dropna(subset=["Revenue"]).tail(8)
+            if tkr_df.empty:
+                continue
+            fig_rrev.add_trace(go.Bar(
+                x=tkr_df["Quarter"].apply(lambda d: f"{d.year}-Q{(d.month-1)//3+1}") if pd.api.types.is_datetime64_any_dtype(tkr_df["Quarter"]) else tkr_df["Quarter"].astype(str),
+                y=tkr_df["Revenue"] / 1e9,
+                name=tkr,
+                marker_color=rest_colors_map.get(tkr, "#888"),
+                hovertemplate=f"<b>{tkr}</b><br>" + "%{x}: $%{y:.1f}B<extra></extra>",
+            ))
+        fig_rrev.update_layout(
+            **_base_layout(title="Quarterly Revenue ($B)"),
+            barmode="group", yaxis_title="Revenue ($B)",
+            yaxis_tickformat="$,.1f", height=460,
+            legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+        )
+        st.plotly_chart(fig_rrev, width="stretch")
+
+        # Margin comparison
+        col_rm, col_re = st.columns(2)
+        with col_rm:
+            st.markdown("**EBITDA Margin Trend**")
+            fig_rmarg = go.Figure()
+            for tkr in rest_fin_tickers:
+                tkr_df = rest_fin_df[rest_fin_df["Ticker"] == tkr].dropna(subset=["EBITDA Margin"]).tail(8)
+                if tkr_df.empty:
+                    continue
+                margin_vals = tkr_df["EBITDA Margin"] * 100 if tkr_df["EBITDA Margin"].max() < 1 else tkr_df["EBITDA Margin"]
+                fig_rmarg.add_trace(go.Scatter(
+                    x=tkr_df["Quarter"], y=margin_vals,
+                    name=tkr, mode="lines+markers",
+                    line=dict(color=rest_colors_map.get(tkr, "#888"), width=2),
+                    hovertemplate=f"<b>{tkr}</b><br>" + "%{x|%b %Y}: %{y:.1f}%<extra></extra>",
+                ))
+            fig_rmarg.update_layout(
+                **_base_layout(title="EBITDA Margin (%)"),
+                yaxis_title="Margin (%)", yaxis_tickformat=".0f", height=380,
+                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+            )
+            st.plotly_chart(fig_rmarg, width="stretch")
+
+        with col_re:
+            st.markdown("**Quarterly EPS**")
+            fig_reps = go.Figure()
+            for tkr in rest_fin_tickers:
+                tkr_df = rest_fin_df[rest_fin_df["Ticker"] == tkr].dropna(subset=["EPS"]).tail(8)
+                if tkr_df.empty:
+                    continue
+                fig_reps.add_trace(go.Scatter(
+                    x=tkr_df["Quarter"], y=tkr_df["EPS"],
+                    name=tkr, mode="lines+markers",
+                    line=dict(color=rest_colors_map.get(tkr, "#888"), width=2),
+                    hovertemplate=f"<b>{tkr}</b><br>" + "%{x|%b %Y}: $%{y:.2f}<extra></extra>",
+                ))
+            fig_reps.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
+            fig_reps.update_layout(
+                **_base_layout(title="Diluted EPS ($)"),
+                yaxis_title="EPS ($)", height=380,
+                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+            )
+            st.plotly_chart(fig_reps, width="stretch")
+
+        with st.expander("Full Restaurant Financials Data"):
+            st.dataframe(rest_fin_df, width="stretch", height=400)
+    else:
+        st.info("Restaurant company financial data not available.")
 
     st.divider()
     st.caption(
@@ -430,8 +506,9 @@ elif cfg["name"] == "Movie Theaters":
     from utils.data_fetchers import (
         get_weekly_box_office, get_weekly_box_office_trend,
         get_weekly_box_office_52w, get_annual_box_office,
-        get_release_schedule, get_distributor_share_multi_year,
-        get_franchise_box_office,
+        get_release_schedule,
+        get_franchise_box_office, get_year_top_movies,
+        get_biggest_openings,
     )
     from utils.charts import weekly_bo_chart, annual_bo_chart, ytd_pacing_chart
 
@@ -534,7 +611,6 @@ elif cfg["name"] == "Movie Theaters":
             f"${latest_wk_gross:,.0f}",
             delta=wow_delta, delta_color="normal",
         )
-        add_export_metric("Weekend BO", f"${latest_wk_gross:,.0f}", wow_delta or "")
 
     if mtd_cy > 0:
         mtd_delta = None
@@ -546,7 +622,6 @@ elif cfg["name"] == "Movie Theaters":
             f"${mtd_cy:,.0f}",
             delta=mtd_delta, delta_color="normal",
         )
-        add_export_metric("MTD BO", f"${mtd_cy:,.0f}", mtd_delta or "")
 
     if ytd_cy > 0:
         ytd_delta = None
@@ -554,7 +629,6 @@ elif cfg["name"] == "Movie Theaters":
             ytd_pct = (ytd_cy / ytd_py - 1) * 100
             ytd_delta = f"{ytd_pct:+.1f}% vs PY"
         c3.metric("YTD Box Office", f"${ytd_cy:,.0f}", delta=ytd_delta, delta_color="normal")
-        add_export_metric("YTD BO", f"${ytd_cy:,.0f}", ytd_delta or "")
 
     if not annual_df.empty:
         latest_year = annual_df.iloc[0]
@@ -623,7 +697,6 @@ elif cfg["name"] == "Movie Theaters":
             legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
         )
         st.plotly_chart(fig_52w, width="stretch")
-        add_export_figure("52-Week Box Office", fig_52w)
 
         total_52w = weekly_52w["combined_gross"].sum()
         avg_52w = weekly_52w["combined_gross"].mean()
@@ -647,7 +720,6 @@ elif cfg["name"] == "Movie Theaters":
                 lambda v: f"${v:,.0f}" if pd.notna(v) else "N/A"
             )
             st.dataframe(tbl_52w, width="stretch", height=500, hide_index=True)
-            add_export_table("52-Week Box Office", tbl_52w)
     else:
         st.warning(
             "Weekly box office data unavailable. The Numbers may be temporarily slow. "
@@ -662,12 +734,20 @@ elif cfg["name"] == "Movie Theaters":
     if not weekly_trend_prior.empty:
         # Build full 52-week comparison using PY as backbone.
         # CY data overlaid for weeks reported so far.
+        # PY-1 data fetched so PY weeks also show a YoY comparison.
         prior_wk = weekly_trend_prior.head(52).copy()
         prior_wk["week_num"] = range(1, len(prior_wk) + 1)
 
         current_wk = weekly_trend_current.copy() if not weekly_trend_current.empty else pd.DataFrame()
         if not current_wk.empty:
             current_wk["week_num"] = range(1, len(current_wk) + 1)
+
+        # Fetch PY-1 data so PY weeks can be compared vs their own prior year
+        py_minus_1_year = bo_compare_year - 1
+        weekly_trend_py1 = get_weekly_box_office_trend(py_minus_1_year)
+        py1_wk = weekly_trend_py1.head(52).copy() if not weekly_trend_py1.empty else pd.DataFrame()
+        if not py1_wk.empty:
+            py1_wk["week_num"] = range(1, len(py1_wk) + 1)
 
         # PY as the 52-week scaffold
         comp_df = prior_wk[["week_num", "weekend_date", "no1_movie", "combined_gross"]].copy()
@@ -691,10 +771,25 @@ elif cfg["name"] == "Movie Theaters":
             comp_df["cy_movie"] = None
             comp_df["cy_gross"] = np.nan
 
-        # YoY %
+        # Merge PY-1 by week_num (for PY vs PY-1 on future weeks)
+        if not py1_wk.empty:
+            py1_cols = py1_wk[["week_num", "combined_gross"]].copy()
+            py1_cols.rename(columns={"combined_gross": "py1_gross"}, inplace=True)
+            comp_df = comp_df.merge(py1_cols, on="week_num", how="left")
+        else:
+            comp_df["py1_gross"] = np.nan
+
+        # YoY % — CY vs PY for reported weeks
         comp_df["yoy_pct"] = np.where(
             (comp_df["cy_gross"].notna()) & (comp_df["py_gross"] > 0),
             (comp_df["cy_gross"] / comp_df["py_gross"] - 1) * 100,
+            np.nan,
+        )
+
+        # PY vs PY-1 % — for weeks without CY data
+        comp_df["py_yoy_pct"] = np.where(
+            (comp_df["py_gross"].notna()) & (comp_df["py1_gross"] > 0),
+            (comp_df["py_gross"] / comp_df["py1_gross"] - 1) * 100,
             np.nan,
         )
 
@@ -755,7 +850,7 @@ elif cfg["name"] == "Movie Theaters":
             )
         fig_yoy.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1, secondary_y=True)
         fig_yoy.update_layout(
-            **_base_layout(title=f"Weekly BO — CY vs PY (Full Year)"),
+            **_base_layout(title="Weekly BO — CY vs PY (Full Year)"),
             height=460,
             legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
         )
@@ -763,45 +858,84 @@ elif cfg["name"] == "Movie Theaters":
         fig_yoy.update_yaxes(title_text="YoY %", tickformat="+.0f%", secondary_y=True)
         st.plotly_chart(fig_yoy, width="stretch")
 
-        # Weekly detail table — all 52 weeks
-        st.markdown("**Week-by-Week Detail (52 Weeks)**")
+        # Weekly detail table — rolling 52 weeks back from latest reported date
+        st.markdown("**Week-by-Week Detail (Rolling 52 Weeks)**")
+
+        # Build rolling lookback: start with CY weeks (latest first),
+        # then continue into PY weeks until we have 52 rows.
         detail_rows = []
-        for _, row in comp_df.iterrows():
-            has_cy = pd.notna(row.get("cy_gross"))
+
+        # CY weeks in reverse (latest first)
+        cy_reported = comp_df[comp_df["cy_gross"].notna()].sort_values("week_num", ascending=False)
+        for _, row in cy_reported.iterrows():
+            yoy_val = round(row["yoy_pct"], 1) if pd.notna(row.get("yoy_pct")) else None
             detail_rows.append({
-                "Wk": int(row["week_num"]),
-                "Weekend": row["display_date"].strftime("%b %d, %Y") if pd.notna(row.get("display_date")) else "",
-                "CY BO": f"${row['cy_gross']:,.0f}" if has_cy else "",
-                "PY BO": f"${row['py_gross']:,.0f}" if row["py_gross"] else "N/A",
-                "YoY %": round(row["yoy_pct"], 1) if pd.notna(row.get("yoy_pct")) else None,
-                "#1 (CY)": row.get("cy_movie", "") if has_cy else "",
-                "#1 (PY)": row.get("py_movie", ""),
+                "Weekend": row["cy_weekend_date"].strftime("%b %d, %Y") if pd.notna(row.get("cy_weekend_date")) else "",
+                "BO": f"${row['cy_gross']:,.0f}",
+                "PY BO": f"${row['py_gross']:,.0f}" if pd.notna(row.get("py_gross")) and row["py_gross"] else "N/A",
+                "YoY %": yoy_val,
+                "#1 Movie": row.get("cy_movie", "") or "",
+                "_is_py": False,
             })
+
+        # Fill remaining rows from PY weeks (latest first), each vs PY-1
+        remaining = 52 - len(detail_rows)
+        if remaining > 0:
+            # PY weeks not already covered by CY (i.e. weeks after the last CY week, going backwards)
+            py_only = prior_wk.sort_values("week_num", ascending=False)
+            for _, row in py_only.iterrows():
+                if len(detail_rows) >= 52:
+                    break
+                wk = int(row["week_num"])
+                # Skip PY weeks that overlap with CY weeks already shown
+                if wk <= n_cy_weeks:
+                    continue
+                py_gross = row["combined_gross"]
+                # Get PY-1 gross for this week
+                py1_match = py1_wk[py1_wk["week_num"] == wk] if not py1_wk.empty else pd.DataFrame()
+                py1_gross = py1_match["combined_gross"].iloc[0] if not py1_match.empty else np.nan
+                yoy_val = round((py_gross / py1_gross - 1) * 100, 1) if pd.notna(py1_gross) and py1_gross > 0 and pd.notna(py_gross) else None
+                detail_rows.append({
+                    "Weekend": row["weekend_date"].strftime("%b %d, %Y") if pd.notna(row.get("weekend_date")) else "",
+                    "BO": f"${py_gross:,.0f}" if pd.notna(py_gross) and py_gross else "N/A",
+                    "PY BO": f"${py1_gross:,.0f}" if pd.notna(py1_gross) and py1_gross else "N/A",
+                    "YoY %": yoy_val,
+                    "#1 Movie": row.get("no1_movie", "") or "",
+                    "_is_py": True,
+                })
 
         if detail_rows:
             detail_df = pd.DataFrame(detail_rows)
+            # Store _is_py flag before dropping for display
+            is_py_flags = detail_df["_is_py"].tolist()
+            detail_df = detail_df.drop(columns=["_is_py"])
 
             def _color_yoy(val):
                 if isinstance(val, (int, float)):
                     return f"color: {'#2ecc71' if val >= 0 else '#e74c3c'}; font-weight: bold"
                 return ""
 
-            def _dim_future(row):
-                """Gray out rows where CY data hasn't arrived yet."""
-                if row["CY BO"] == "":
-                    return ["color: #aaa"] * len(row)
-                return [""] * len(row)
+            def _dim_py_row(row_idx):
+                """Gray out PY rows to distinguish from CY rows."""
+                styles = []
+                for _ in row_idx.index:
+                    styles.append("color: #888" if is_py_flags[row_idx.name] else "")
+                return styles
 
             styled = (
                 detail_df.style
-                    .apply(_dim_future, axis=1)
+                    .apply(lambda row: ["color: #888"] * len(row) if is_py_flags[row.name] else [""] * len(row), axis=1)
                     .map(_color_yoy, subset=["YoY %"])
                     .format({"YoY %": lambda v: f"{v:+.1f}%" if v is not None and pd.notna(v) else ""})
             )
             st.dataframe(styled, width="stretch", height=700, hide_index=True)
+            st.caption(
+                f"Top rows = CY ({current_year}) vs PY ({bo_compare_year}). "
+                f"Grayed rows = PY ({bo_compare_year}) vs PY-1 ({py_minus_1_year})."
+            )
 
     elif not weekly_trend_current.empty:
-        st.info(f"PY ({bo_compare_year}) data not available.")
+        st.info("PY data not available for the selected comparison year.")
     else:
         st.warning("Weekly trend data unavailable.")
 
@@ -852,65 +986,6 @@ elif cfg["name"] == "Movie Theaters":
                     pct = row.get('% vs LW', '')
                     st.markdown(f"- **{row['Title']}** — {gross} ({pct} vs LW)")
 
-        # ── Distributor market share — stacked bar by year ────────────────
-        st.subheader("Annual Box Office by Studio")
-        st.caption(
-            f"Top studios by total domestic gross — {current_year} is year-to-date. "
-            "Remaining studios grouped as 'Other'."
-        )
-
-        with st.spinner("Fetching distributor history…"):
-            dist_hist = get_distributor_share_multi_year(
-                list(range(current_year - 4, current_year + 1))
-            )
-        if not dist_hist.empty:
-            # Top 6 studios by total gross across all years
-            top_dist = (
-                dist_hist.groupby("Distributor")["Total Gross"]
-                .sum().nlargest(6).index.tolist()
-            )
-            plot_df = dist_hist.copy()
-            plot_df["Distributor"] = plot_df["Distributor"].where(
-                plot_df["Distributor"].isin(top_dist), "Other"
-            )
-            pivot = plot_df.groupby(["Year", "Distributor"])["Total Gross"].sum().unstack(fill_value=0)
-            pivot = pivot[pivot.sum().sort_values(ascending=False).index]
-
-            # Label current year as "2026 YTD"
-            x_labels = [
-                f"{int(yr)} YTD" if yr == current_year else str(int(yr))
-                for yr in pivot.index
-            ]
-
-            dist_colors = [
-                "#1565C0", "#e67e22", "#2ecc71", "#e74c3c",
-                "#9b59b6", "#f39c12", "#95a5a6",
-            ]
-            fig_dist = go.Figure()
-            for i, col in enumerate(pivot.columns):
-                fig_dist.add_trace(go.Bar(
-                    x=x_labels,
-                    y=pivot[col],
-                    name=col,
-                    marker_color=dist_colors[i % len(dist_colors)],
-                    hovertemplate=f"<b>{col}</b><br>" + "%{x}: $%{y:,.0f}<extra></extra>",
-                ))
-            fig_dist.update_layout(
-                **_base_layout(title="Annual Domestic Box Office by Studio"),
-                barmode="stack",
-                yaxis_title="Total Gross ($)",
-                yaxis_tickformat="$,.0s",
-                height=500,
-                legend=dict(
-                    orientation="h", yanchor="top", y=-0.10,
-                    xanchor="center", x=0.5, font=dict(size=12),
-                ),
-                margin=dict(b=80),
-            )
-            st.plotly_chart(fig_dist, width="stretch")
-            add_export_figure("Annual BO by Studio", fig_dist)
-        else:
-            st.info("Historical distributor data unavailable.")
     else:
         st.warning("Weekly box office chart data unavailable.")
 
@@ -961,10 +1036,298 @@ elif cfg["name"] == "Movie Theaters":
     else:
         st.warning("Insufficient data for YTD pacing comparison.")
 
+    # ── CY vs PY weekly YTD breakdown ──────────────────────────────────
+    if not weekly_trend_current.empty and not weekly_trend_prior.empty:
+        st.subheader("YTD Weekly Breakdown — CY vs PY")
+        n_cy = len(weekly_trend_current)
+        cy_ytd = weekly_trend_current.head(n_cy).copy()
+        py_ytd = weekly_trend_prior.head(n_cy).copy()
+        cy_ytd["week_num"] = range(1, len(cy_ytd) + 1)
+        py_ytd["week_num"] = range(1, len(py_ytd) + 1)
+
+        merged = cy_ytd[["week_num", "weekend_date", "combined_gross"]].merge(
+            py_ytd[["week_num", "combined_gross"]],
+            on="week_num", suffixes=("_cy", "_py"),
+        )
+        merged["yoy_pct"] = np.where(
+            merged["combined_gross_py"] > 0,
+            (merged["combined_gross_cy"] / merged["combined_gross_py"] - 1) * 100,
+            np.nan,
+        )
+        merged["cum_cy"] = merged["combined_gross_cy"].cumsum()
+        merged["cum_py"] = merged["combined_gross_py"].cumsum()
+        merged["cum_yoy_pct"] = np.where(
+            merged["cum_py"] > 0,
+            (merged["cum_cy"] / merged["cum_py"] - 1) * 100,
+            np.nan,
+        )
+        week_labels = [f"Wk {w}" for w in merged["week_num"]]
+
+        from plotly.subplots import make_subplots as _mk_sub
+        fig_ytd = _mk_sub(
+            rows=2, cols=1, shared_xaxes=True,
+            row_heights=[0.65, 0.35], vertical_spacing=0.06,
+            specs=[[{"secondary_y": True}], [{}]],
+        )
+
+        # Top panel: grouped bars CY vs PY weekly BO
+        fig_ytd.add_trace(
+            go.Bar(
+                x=week_labels, y=merged["combined_gross_cy"],
+                name=f"CY ({current_year})", marker_color="#1565C0",
+                hovertemplate="CY Wk %{x}: $%{y:,.0f}<extra></extra>",
+            ),
+            row=1, col=1, secondary_y=False,
+        )
+        fig_ytd.add_trace(
+            go.Bar(
+                x=week_labels, y=merged["combined_gross_py"],
+                name=f"PY ({bo_compare_year})", marker_color="#e67e22", opacity=0.6,
+                hovertemplate="PY Wk %{x}: $%{y:,.0f}<extra></extra>",
+            ),
+            row=1, col=1, secondary_y=False,
+        )
+        # Cumulative YoY % line on secondary axis
+        fig_ytd.add_trace(
+            go.Scatter(
+                x=week_labels, y=merged["cum_yoy_pct"],
+                name="Cum YoY %", line=dict(color="#2ecc71", width=2.5),
+                hovertemplate="Cum YoY: %{y:+.1f}%<extra></extra>",
+            ),
+            row=1, col=1, secondary_y=True,
+        )
+
+        # Bottom panel: weekly YoY % bars
+        bar_colors = ["#2ecc71" if v >= 0 else "#e74c3c" for v in merged["yoy_pct"].fillna(0)]
+        fig_ytd.add_trace(
+            go.Bar(
+                x=week_labels, y=merged["yoy_pct"],
+                name="Weekly YoY %", marker_color=bar_colors,
+                hovertemplate="Wk %{x}: %{y:+.1f}%<extra></extra>",
+                showlegend=False,
+            ),
+            row=2, col=1,
+        )
+        fig_ytd.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1, row=2, col=1)
+
+        fig_ytd.update_layout(
+            **_base_layout(
+                title=f"YTD Weekly BO — CY ({current_year}) vs PY ({bo_compare_year})",
+                margin=dict(l=50, r=20, t=40, b=40),
+            ),
+            barmode="group",
+            height=600,
+            legend=dict(orientation="h", yanchor="top", y=-0.08, xanchor="center", x=0.5),
+        )
+        fig_ytd.update_yaxes(title_text="Weekend BO ($)", tickformat="$,.0s", row=1, col=1, secondary_y=False)
+        fig_ytd.update_yaxes(title_text="Cum YoY %", row=1, col=1, secondary_y=True)
+        fig_ytd.update_yaxes(title_text="Weekly YoY %", row=2, col=1)
+        fig_ytd.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1, row=1, col=1, secondary_y=True)
+        st.plotly_chart(fig_ytd, width="stretch")
+
+        # Summary metrics
+        total_cy = merged["combined_gross_cy"].sum()
+        total_py = merged["combined_gross_py"].sum()
+        total_yoy = (total_cy / total_py - 1) * 100 if total_py > 0 else 0
+        avg_weekly_yoy = merged["yoy_pct"].mean()
+
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc1.metric("CY YTD Total", f"${total_cy:,.0f}")
+        mc2.metric("PY YTD Total", f"${total_py:,.0f}")
+        mc3.metric("YTD YoY %", f"{total_yoy:+.1f}%")
+        mc4.metric("Avg Weekly YoY %", f"{avg_weekly_yoy:+.1f}%" if pd.notna(avg_weekly_yoy) else "N/A")
+
+        st.caption(
+            f"Comparing first {n_cy} weeks of {current_year} vs same {n_cy} weeks of {bo_compare_year}."
+        )
+
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 6: RELEASE CALENDAR
+    # SECTION 6: MOVIE PERFORMANCE TRACKER — ACTUAL vs PROJECTED
+    # ══════════════════════════════════════════════════════════════════════
+    st.subheader(f"{current_year} Movie Performance Tracker")
+    st.caption(
+        "Tracking actual domestic gross vs projected final. "
+        "Projected final = Opening Weekend × genre-based multiplier (historical average)."
+    )
+
+    # Genre-based OW-to-final multipliers (historical domestic averages)
+    _GENRE_MULT = {
+        "Adventure": 3.0, "Action": 2.6, "Comedy": 2.8, "Drama": 3.2,
+        "Horror": 2.3, "Thriller/Suspense": 2.7, "Romantic Comedy": 3.0,
+        "Musical": 3.0, "Documentary": 4.0, "Black Comedy": 3.0,
+        "Western": 2.5, "Educational": 3.0, "Reality": 2.5,
+        "Concert/Performance": 2.0, "Multiple Genres": 2.8,
+    }
+    _DEFAULT_MULT = 2.8
+
+    with st.spinner("Fetching movie data…"):
+        top_movies = get_year_top_movies(current_year)
+        openings_df = get_biggest_openings(current_year)
+
+    if not top_movies.empty:
+        movies = top_movies.head(30).copy()
+
+        # Merge opening weekend data
+        if not openings_df.empty:
+            open_best = openings_df.sort_values("Opening Gross", ascending=False).drop_duplicates(subset=["Movie"], keep="first")
+            movies = movies.merge(open_best[["Movie", "Opening Gross"]], on="Movie", how="left")
+        else:
+            movies["Opening Gross"] = np.nan
+
+        # Weeks out & status
+        today_ts = pd.Timestamp.now().normalize()
+        movies["Weeks Out"] = ((today_ts - movies["Release Date"]).dt.days / 7).round(0).astype("Int64")
+        movies["Status"] = np.where(movies["Weeks Out"] <= 8, "In Theaters", "Finished")
+
+        # Legs
+        movies["Legs"] = np.where(
+            (movies["Opening Gross"].notna()) & (movies["Opening Gross"] > 0),
+            movies["Gross"] / movies["Opening Gross"], np.nan,
+        )
+
+        # Initial projected domestic gross = OW × genre multiplier (never adjusted)
+        movies["Multiplier"] = movies["Genre"].map(_GENRE_MULT).fillna(_DEFAULT_MULT)
+        movies["Projection"] = np.where(
+            (movies["Opening Gross"].notna()) & (movies["Opening Gross"] > 0),
+            movies["Opening Gross"] * movies["Multiplier"], np.nan,
+        )
+        # vs Projection %
+        movies["vs Proj"] = np.where(
+            (movies["Projection"].notna()) & (movies["Projection"] > 0),
+            (movies["Gross"] / movies["Projection"] - 1) * 100, np.nan,
+        )
+        # % Complete
+        movies["% Complete"] = np.where(
+            (movies["Projection"].notna()) & (movies["Projection"] > 0),
+            movies["Gross"] / movies["Projection"] * 100, np.nan,
+        )
+
+        # ── Actual vs Projected bar chart ────────────────────────────────
+        chart_df = movies.head(15).sort_values("Gross", ascending=True).copy()
+        fig_movies = go.Figure()
+
+        # Ghost bars: projected remaining
+        remaining = np.where(
+            (chart_df["Projection"].notna()) & (chart_df["Projection"] > chart_df["Gross"]),
+            chart_df["Projection"] - chart_df["Gross"], 0,
+        )
+        proj_text = [
+            f"${v/1e6:,.0f}M proj." if v > 0 else ""
+            for v in chart_df["Projection"].fillna(0)
+        ]
+        fig_movies.add_trace(go.Bar(
+            x=chart_df["Gross"],
+            y=chart_df["Movie"],
+            orientation="h",
+            marker_color=["#1565C0" if s == "In Theaters" else "#95a5a6" for s in chart_df["Status"]],
+            name="Actual Gross",
+            text=[f"${v/1e6:,.0f}M" for v in chart_df["Gross"]],
+            textposition="inside",
+            insidetextanchor="end",
+            hovertemplate="<b>%{y}</b><br>Actual: $%{x:,.0f}<extra></extra>",
+        ))
+        fig_movies.add_trace(go.Bar(
+            x=remaining,
+            y=chart_df["Movie"],
+            orientation="h",
+            marker_color="rgba(21, 101, 192, 0.15)",
+            marker_line=dict(color="#1565C0", width=1),
+            name="Projected Remaining",
+            text=proj_text,
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Remaining to proj.: $%{x:,.0f}<extra></extra>",
+        ))
+        fig_movies.update_layout(
+            **_base_layout(
+                title=f"Top {current_year} Movies — Actual vs Projected Domestic Gross",
+                margin=dict(l=200, r=100, t=40, b=80),
+            ),
+            barmode="stack",
+            xaxis_title="Domestic Gross ($)",
+            xaxis_tickformat="$,.0s",
+            height=max(460, len(chart_df) * 34 + 40),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="top", y=-0.14, xanchor="center", x=0.5),
+        )
+        st.plotly_chart(fig_movies, width="stretch")
+
+        # ── Summary metrics ──────────────────────────────────────────────
+        in_theater = movies[movies["Status"] == "In Theaters"]
+        over_proj = movies[(movies["vs Proj"].notna()) & (movies["vs Proj"] > 0)]
+        under_proj = movies[(movies["vs Proj"].notna()) & (movies["vs Proj"] < 0)]
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Movies Tracked", len(movies))
+        m2.metric("Still in Theaters", len(in_theater))
+        m3.metric("Over-performing", f"{len(over_proj)}", help="Actual > projected based on OW × genre mult.")
+        m4.metric("Under-performing", f"{len(under_proj)}", help="Actual < projected based on OW × genre mult.")
+
+        # ── Performance table ─────────────────────────────────────────────
+        tbl = pd.DataFrame({
+            "#": movies["Rank"],
+            "Movie": movies["Movie"],
+            "Distributor": movies["Distributor"],
+            "Genre": movies["Genre"],
+            "Domestic Gross": movies["Gross"],
+            "Opening WE": movies["Opening Gross"],
+            "Projection": movies["Projection"],
+            "vs Proj.": movies["vs Proj"],
+            "% Complete": movies["% Complete"],
+            "Legs": movies["Legs"],
+            "Wks": movies["Weeks Out"],
+            "Status": movies["Status"],
+        })
+
+        def _color_vs_proj(val):
+            if isinstance(val, (int, float)) and not np.isnan(val):
+                if val >= 10:
+                    return "color: #2ecc71; font-weight: bold"
+                elif val > 0:
+                    return "color: #2ecc71"
+                elif val <= -10:
+                    return "color: #e74c3c; font-weight: bold"
+                else:
+                    return "color: #e74c3c"
+            return ""
+
+        def _color_legs(val):
+            if isinstance(val, (int, float)) and not np.isnan(val):
+                if val >= 3.0:
+                    return "color: #2ecc71; font-weight: bold"
+                elif val < 2.0:
+                    return "color: #e74c3c"
+            return ""
+
+        styled_tbl = (
+            tbl.style
+                .map(_color_vs_proj, subset=["vs Proj."])
+                .map(_color_legs, subset=["Legs"])
+                .format({
+                    "Domestic Gross": lambda v: f"${v/1e6:,.1f}M" if pd.notna(v) and v else "N/A",
+                    "Opening WE": lambda v: f"${v/1e6:,.1f}M" if pd.notna(v) and v else "—",
+                    "Projection": lambda v: f"${v/1e6:,.1f}M" if pd.notna(v) and v else "—",
+                    "vs Proj.": lambda v: f"{v:+.0f}%" if pd.notna(v) else "—",
+                    "% Complete": lambda v: f"{v:.0f}%" if pd.notna(v) else "—",
+                    "Legs": lambda v: f"{v:.1f}x" if pd.notna(v) else "—",
+                    "Wks": lambda v: f"{v}" if pd.notna(v) else "—",
+                })
+        )
+        st.dataframe(styled_tbl, width="stretch", height=600, hide_index=True)
+
+        st.caption(
+            "**Projection** = Opening Weekend × genre multiplier (historical avg — fixed at release). "
+            "**vs Proj.** = how far actual gross is vs initial projection (green = beating, red = behind). "
+            "**Legs** = Total Gross / Opening (>3x = strong word-of-mouth). "
+            "Solid blue = in theaters, light extension = projected remaining."
+        )
+    else:
+        st.info(f"No top movies data available for {current_year}.")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 7: RELEASE CALENDAR
     # ══════════════════════════════════════════════════════════════════════
     st.subheader("Upcoming Release Calendar")
     st.caption("Major releases from The Numbers release schedule")
@@ -1036,7 +1399,6 @@ elif cfg["name"] == "Movie Theaters":
             height=max(500, top_n * 28),
         )
         st.plotly_chart(fig_fran, width="stretch")
-        add_export_figure("Top Franchises - Domestic BO", fig_fran)
 
         if "Last Year" in top_fran.columns:
             st.caption("Green = active franchise (release within last 3 years) | Gray = dormant")
@@ -1059,7 +1421,6 @@ elif cfg["name"] == "Movie Theaters":
                 }),
                 width="stretch", height=500,
             )
-            add_export_table("Franchise Comparison", table_fran[display_cols])
 
         # Sequels vs Originals analysis
         if "Movies" in franchise_df.columns and "Domestic BO" in franchise_df.columns:
@@ -1151,7 +1512,6 @@ elif cfg["name"] == "Movie Theaters":
         legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
     )
     st.plotly_chart(fig_sw, width="stretch")
-    add_export_figure("Streaming Window Analysis", fig_sw)
 
     # Average window by studio
     col_sw1, col_sw2 = st.columns(2)
@@ -1221,6 +1581,7 @@ elif cfg["name"] == "Movie Theaters":
                         name=lbl.get("cpi_label_1", "Movie Admissions"),
                         line=dict(color="#e67e22", width=2.5),
                         fill="tozeroy", fillcolor="rgba(230, 126, 34, 0.1)",
+                        hovertemplate="%{x|%b %Y}: %{y:.1f}%<extra></extra>",
                     ))
                     fig_cpi.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
                     fig_cpi.update_layout(
@@ -1237,6 +1598,7 @@ elif cfg["name"] == "Movie Theaters":
                     name=lbl.get("employment_label", "Employment"),
                     line=dict(color="#3498db", width=2.5),
                     fill="tozeroy", fillcolor="rgba(52, 152, 219, 0.1)",
+                    hovertemplate="%{x|%b %Y}: %{y:,.0f}<extra></extra>",
                 ))
                 fig_emp.update_layout(
                     **_base_layout(title=lbl.get("employment_chart_title", "Motion Picture Employment")),
@@ -1393,6 +1755,66 @@ elif cfg["name"] == "Gaming":
     else:
         st.warning("Gambling revenue data unavailable. Check FRED API key.")
 
+    # ── GGR YoY Growth + Consumer Sentiment overlay ────────────────
+    if not gambling_rev.empty and len(gambling_rev) >= 5:
+        yoy_ggr = yoy_q(gambling_rev)
+        if not yoy_ggr.empty:
+            col_gy, col_gs = st.columns(2)
+            with col_gy:
+                st.markdown("**GGR YoY Growth (%)**")
+                bar_colors = ["#2ecc71" if v >= 0 else "#e74c3c" for v in yoy_ggr.values]
+                fig_ggr_yoy = go.Figure(go.Bar(
+                    x=[f"{d.year} Q{(d.month-1)//3+1}" for d in yoy_ggr.index],
+                    y=yoy_ggr.values,
+                    marker_color=bar_colors,
+                    hovertemplate="%{x}: %{y:+.1f}%<extra></extra>",
+                ))
+                fig_ggr_yoy.add_hline(y=0, line_color="rgba(0,0,0,0.3)", line_width=1)
+                fig_ggr_yoy.update_layout(
+                    **_base_layout(title="Quarterly GGR YoY Growth (%)"),
+                    yaxis_title="YoY %", height=380,
+                )
+                st.plotly_chart(fig_ggr_yoy, width="stretch")
+
+            with col_gs:
+                if "consumer_sentiment" in series_data:
+                    cs = series_data["consumer_sentiment"]
+                    st.markdown("**GGR vs Consumer Sentiment**")
+                    from plotly.subplots import make_subplots as _mk_ggr
+                    fig_gcs = _mk_ggr(specs=[[{"secondary_y": True}]])
+                    fig_gcs.add_trace(
+                        go.Bar(
+                            x=[f"{d.year} Q{(d.month-1)//3+1}" for d in yoy_ggr.index],
+                            y=yoy_ggr.values,
+                            name="GGR YoY %",
+                            marker_color=["#1565C0" if v >= 0 else "#e74c3c" for v in yoy_ggr.values],
+                            hovertemplate="GGR: %{y:+.1f}%<extra></extra>",
+                        ), secondary_y=False,
+                    )
+                    # Resample sentiment to quarterly for alignment
+                    cs_q = cs.resample("QE").mean().dropna()
+                    fig_gcs.add_trace(
+                        go.Scatter(
+                            x=[f"{d.year} Q{(d.month-1)//3+1}" for d in cs_q.index],
+                            y=cs_q.values,
+                            name="Consumer Sentiment",
+                            line=dict(color="#e67e22", width=2.5),
+                            hovertemplate="Sentiment: %{y:.1f}<extra></extra>",
+                        ), secondary_y=True,
+                    )
+                    fig_gcs.update_layout(
+                        **_base_layout(title="GGR Growth vs Consumer Sentiment"),
+                        height=380,
+                        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+                    )
+                    fig_gcs.update_yaxes(title_text="GGR YoY %", secondary_y=False)
+                    fig_gcs.update_yaxes(title_text="UMich Sentiment", secondary_y=True)
+                    st.plotly_chart(fig_gcs, width="stretch")
+                    st.caption(
+                        "Consumer sentiment (UMich) often leads gambling revenue trends. "
+                        "Declining sentiment can signal softer discretionary spending ahead."
+                    )
+
     # ── Consumer Spending on Gambling (if available) ──────────────────
     if "gambling_pce" in series_data:
         with st.expander("Consumer Spending on Gambling (Real PCE)"):
@@ -1402,6 +1824,7 @@ elif cfg["name"] == "Gaming":
                 name="Real PCE: Gambling",
                 line=dict(color="#8E44AD", width=2.5),
                 fill="tozeroy", fillcolor="rgba(142, 68, 173, 0.08)",
+                hovertemplate="%{x|%Y}: $%{y:,.1f}B<extra></extra>",
             ))
             fig_pce.update_layout(
                 **_base_layout(title="Real Personal Consumption on Gambling (Billions $)"),
@@ -1508,7 +1931,6 @@ elif cfg["name"] == "Gaming":
             if hold_col:
                 fig_hh.update_xaxes(title_text="Hold %", secondary_y=True)
             st.plotly_chart(fig_hh, width="stretch")
-            add_export_figure("Sports Betting Handle vs Hold", fig_hh)
 
             # Summary metrics
             total_handle = sb_valid[handle_col].sum()
@@ -1524,7 +1946,6 @@ elif cfg["name"] == "Gaming":
         # Full sports betting table
         with st.expander("Full Sports Betting Data Table"):
             st.dataframe(sports_betting_df, width="stretch", height=400)
-            add_export_table("Sports Betting by State", sports_betting_df)
     else:
         st.info("Sports betting data not available. The data source may be temporarily unavailable.")
 
@@ -1594,7 +2015,6 @@ elif cfg["name"] == "Gaming":
                     height=max(400, len(pen_df) * 30),
                 )
                 st.plotly_chart(fig_pen, width="stretch")
-                add_export_figure("iGaming Penetration per Capita", fig_pen)
             else:
                 st.info("Could not compute penetration — state names may not match Census data.")
         else:
@@ -1619,6 +2039,7 @@ elif cfg["name"] == "Gaming":
                 name=lbl.get("cpi_label_1", "Casino PPI"),
                 line=dict(color="#C0392B", width=2.5),
                 fill="tozeroy", fillcolor="rgba(192, 57, 43, 0.1)",
+                hovertemplate="%{x|%b %Y}: %{y:.1f}%<extra></extra>",
             ))
             fig_ppi.add_hline(y=0, line_color="rgba(0,0,0,0.3)", line_width=1)
             fig_ppi.update_layout(
@@ -1632,6 +2053,7 @@ elif cfg["name"] == "Gaming":
                     x=ppi_s.index, y=ppi_s.values,
                     name=lbl.get("cpi_label_1", "Casino PPI"),
                     line=dict(color="#C0392B", width=2),
+                    hovertemplate="%{x|%b %Y}: %{y:.1f}<extra></extra>",
                 ))
                 fig_abs.update_layout(
                     **_base_layout(title=f"{lbl.get('cpi_label_1', 'Casino PPI')} — Index Level"),
@@ -1658,6 +2080,7 @@ elif cfg["name"] == "Gaming":
                     name=lbl.get("wages_label", "Wages"),
                     line=dict(color="#2ecc71", width=2.5),
                     fill="tozeroy", fillcolor="rgba(46, 204, 113, 0.1)",
+                    hovertemplate="%{x|%b %Y}: %{y:.1f}%<extra></extra>",
                 ))
                 fig_w.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
                 fig_w.update_layout(
@@ -1676,6 +2099,7 @@ elif cfg["name"] == "Gaming":
                 name=lbl.get("employment_label", "Employment"),
                 line=dict(color="#3498db", width=2.5),
                 fill="tozeroy", fillcolor="rgba(52, 152, 219, 0.1)",
+                hovertemplate="%{x|%b %Y}: %{y:,.0f}<extra></extra>",
             ))
             fig_e.update_layout(
                 **_base_layout(title=lbl.get("employment_chart_title", "Gaming Employment")),
@@ -1743,13 +2167,13 @@ elif cfg["name"] == "Gaming":
                 y=tkr_df["Revenue"] / 1e9,
                 name=tkr,
                 marker_color=rev_colors[i % len(rev_colors)],
-                hovertemplate=f"<b>{tkr}</b><br>" + "%{x}: $%{y:.2f}B<extra></extra>",
+                hovertemplate=f"<b>{tkr}</b><br>" + "%{x}: $%{y:.1f}B<extra></extra>",
             ))
         fig_rev.update_layout(
             **_base_layout(title="Quarterly Revenue ($B)"),
             barmode="group",
             yaxis_title="Revenue ($B)",
-            yaxis_tickformat="$.2f",
+            yaxis_tickformat="$,.1f",
             height=440,
             legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
         )
@@ -2026,7 +2450,7 @@ else:
                 metric_cols[col_idx % 4].metric(
                     lbl.get("cpi_industry_1_label", "Industry Index 1"),
                     f"{yoy_1.iloc[-1]:.1f}% YoY",
-                    f"{yoy_1.iloc[-1] - yoy_1.iloc[-2]:.2f}pp" if len(yoy_1) > 1 else None,
+                    f"{yoy_1.iloc[-1] - yoy_1.iloc[-2]:.1f}pp" if len(yoy_1) > 1 else None,
                 )
                 col_idx += 1
 
@@ -2036,7 +2460,7 @@ else:
                 metric_cols[col_idx % 4].metric(
                     lbl.get("cpi_industry_2_label", "Industry Index 2"),
                     f"{yoy_2.iloc[-1]:.1f}% YoY",
-                    f"{yoy_2.iloc[-1] - yoy_2.iloc[-2]:.2f}pp" if len(yoy_2) > 1 else None,
+                    f"{yoy_2.iloc[-1] - yoy_2.iloc[-2]:.1f}pp" if len(yoy_2) > 1 else None,
                 )
                 col_idx += 1
 
@@ -2047,7 +2471,7 @@ else:
                 metric_cols[col_idx % 4].metric(
                     kpi_label,
                     f"{yoy_kpi.iloc[-1]:.1f}% YoY",
-                    f"{yoy_kpi.iloc[-1] - yoy_kpi.iloc[-2]:.2f}pp" if len(yoy_kpi) > 1 else None,
+                    f"{yoy_kpi.iloc[-1] - yoy_kpi.iloc[-2]:.1f}pp" if len(yoy_kpi) > 1 else None,
                 )
                 col_idx += 1
 
@@ -2088,6 +2512,7 @@ else:
                 line=dict(color="#C0392B", width=2.5),
                 fill="tozeroy",
                 fillcolor="rgba(192, 57, 43, 0.1)",
+                hovertemplate="%{x|%b %Y}: %{y:.1f}%<extra></extra>",
             ))
             fig_kpi.add_hline(y=0, line_color="rgba(0,0,0,0.3)", line_width=1)
             fig_kpi.update_layout(
@@ -2102,6 +2527,7 @@ else:
                     x=kpi_s.index, y=kpi_s.values,
                     name=kpi_label,
                     line=dict(color="#C0392B", width=2),
+                    hovertemplate="%{x|%b %Y}: %{y:.1f}<extra></extra>",
                 ))
                 fig_kpi_abs.update_layout(
                     **_base_layout(title=f"{kpi_label} — Index Level"),
@@ -2125,6 +2551,7 @@ else:
                 x=yoy_1.index, y=yoy_1.values,
                 name=label_1,
                 line=dict(color="#e67e22", width=2.5),
+                hovertemplate=f"<b>{label_1}</b><br>" + "%{x|%b %Y}: %{y:.1f}%<extra></extra>",
             ))
 
             if not s2.empty and label_2:
@@ -2133,6 +2560,7 @@ else:
                     x=yoy_2.index, y=yoy_2.values,
                     name=label_2,
                     line=dict(color="#3498db", width=2.5),
+                    hovertemplate=f"<b>{label_2}</b><br>" + "%{x|%b %Y}: %{y:.1f}%<extra></extra>",
                 ))
 
             fig_cpi.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
@@ -2149,11 +2577,13 @@ else:
                 fig_abs.add_trace(go.Scatter(
                     x=s1.index, y=s1.values,
                     name=label_1, line=dict(color="#e67e22", width=2),
+                    hovertemplate=f"<b>{label_1}</b><br>" + "%{x|%b %Y}: %{y:.1f}<extra></extra>",
                 ))
                 if not s2.empty and label_2:
                     fig_abs.add_trace(go.Scatter(
                         x=s2.index, y=s2.values,
                         name=label_2, line=dict(color="#3498db", width=2),
+                        hovertemplate=f"<b>{label_2}</b><br>" + "%{x|%b %Y}: %{y:.1f}<extra></extra>",
                     ))
                 fig_abs.update_layout(
                     **_base_layout(title="Index Level"),
@@ -2172,7 +2602,7 @@ else:
                     fig_spread = go.Figure(go.Bar(
                         x=spread.index, y=spread.values,
                         marker_color=["#e74c3c" if v > 0 else "#2ecc71" for v in spread.values],
-                        hovertemplate="%{x|%b %Y}: %{y:.2f}pp<extra></extra>",
+                        hovertemplate="%{x|%b %Y}: %{y:.1f}pp<extra></extra>",
                     ))
                     fig_spread.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
                     fig_spread.update_layout(
@@ -2203,6 +2633,7 @@ else:
                         line=dict(color="#2ecc71", width=2.5),
                         fill="tozeroy",
                         fillcolor="rgba(46, 204, 113, 0.1)",
+                        hovertemplate="%{x|%b %Y}: %{y:.1f}%<extra></extra>",
                     ))
                     fig_w.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
                     fig_w.update_layout(
@@ -2216,6 +2647,7 @@ else:
                             x=wages_s.index, y=wages_s.values,
                             name="Avg Hourly Earnings",
                             line=dict(color="#2ecc71", width=2),
+                            hovertemplate="%{x|%b %Y}: $%{y:.2f}/hr<extra></extra>",
                         ))
                         fig_wa.update_layout(
                             **_base_layout(title=f"{lbl.get('wages_label', 'Wages')} ($/hr)"),
@@ -2236,6 +2668,7 @@ else:
                     line=dict(color="#3498db", width=2.5),
                     fill="tozeroy",
                     fillcolor="rgba(52, 152, 219, 0.1)",
+                    hovertemplate="%{x|%b %Y}: %{y:,.0f}<extra></extra>",
                 ))
                 fig_e.update_layout(
                     **_base_layout(title=lbl.get("employment_chart_title", "Industry Employment")),
@@ -2255,6 +2688,7 @@ else:
                 line=dict(color="#9b59b6", width=2),
                 fill="tozeroy",
                 fillcolor="rgba(155, 89, 182, 0.1)",
+                hovertemplate="%{x|%b %Y}: %{y:,.0f}<extra></extra>",
             ))
             fig_jo.update_layout(
                 **_base_layout(title=lbl["job_openings_chart_title"]),
@@ -2269,7 +2703,7 @@ else:
         # ═══════════════════════════════════════════════════════════════════
         pp_keys = ["box_production", "box_shipment_value",
                    "box_inventories", "occ_ppi", "recycled_paperboard",
-                   "kraft_linerboard", "containerboard_ppi"]
+                   "kraft_linerboard", "containerboard_ppi", "capacity_util"]
         pp_data = {}
         if fred_key_available() and industry_name == "Paper & Packaging":
             with st.spinner("Fetching additional P&P data…"):
@@ -2392,6 +2826,7 @@ else:
                                 name="Kraft Linerboard",
                                 line=dict(color="#E67E22", width=2.5),
                                 fill="tozeroy", fillcolor="rgba(230, 126, 34, 0.08)",
+                                hovertemplate="%{x|%b %Y}: %{y:.1f}%<extra></extra>",
                             ))
                             fig_kl.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
                             fig_kl.update_layout(
@@ -2414,6 +2849,7 @@ else:
                                 name="Recycled Paperboard",
                                 line=dict(color="#2ECC71", width=2.5),
                                 fill="tozeroy", fillcolor="rgba(46, 204, 113, 0.08)",
+                                hovertemplate="%{x|%b %Y}: %{y:.1f}%<extra></extra>",
                             ))
                             fig_rp.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
                             fig_rp.update_layout(
@@ -2435,7 +2871,7 @@ else:
                             fig_vr = go.Figure(go.Bar(
                                 x=vr_spread.index, y=vr_spread.values,
                                 marker_color=["#E67E22" if v > 0 else "#2ECC71" for v in vr_spread.values],
-                                hovertemplate="%{x|%b %Y}: %{y:.2f}pp<extra></extra>",
+                                hovertemplate="%{x|%b %Y}: %{y:.1f}pp<extra></extra>",
                             ))
                             fig_vr.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
                             fig_vr.update_layout(
@@ -2460,6 +2896,7 @@ else:
                     name=lbl.get("box_production_label", "Production Index"),
                     line=dict(color="#1565C0", width=2.5),
                     fill="tozeroy", fillcolor="rgba(21, 101, 192, 0.08)",
+                    hovertemplate="%{x|%b %Y}: %{y:.1f}<extra></extra>",
                 ))
                 fig_bp.update_layout(
                     **_base_layout(title=lbl.get("box_production_chart_title", "Box Production")),
@@ -2479,6 +2916,7 @@ else:
                         name="Shipment Value ($M)",
                         line=dict(color="#17A589", width=2.5),
                         fill="tozeroy", fillcolor="rgba(23, 165, 137, 0.08)",
+                        hovertemplate="%{x|%b %Y}: $%{y:,.0f}M<extra></extra>",
                     ))
                     fig_sv.update_layout(
                         **_base_layout(title=lbl.get("box_shipment_chart_title", "Shipments ($M)")),
@@ -2495,12 +2933,47 @@ else:
                         name="Inventories ($M)",
                         line=dict(color="#884EA0", width=2.5),
                         fill="tozeroy", fillcolor="rgba(136, 78, 160, 0.08)",
+                        hovertemplate="%{x|%b %Y}: $%{y:,.0f}M<extra></extra>",
                     ))
                     fig_inv.update_layout(
                         **_base_layout(title="Inventories: Paperboard Container ($M, SA)"),
                         yaxis_title="Millions $", height=380,
                     )
                     st.plotly_chart(fig_inv, width="stretch")
+
+            # ── Capacity Utilization ──────────────────────────────────────
+            if "capacity_util" in pp_data:
+                cu = pp_data["capacity_util"]
+                st.subheader(lbl.get("capacity_util_chart_title", "Paper Sector Capacity Utilization (%)"))
+                st.caption(lbl.get("capacity_util_caption", ""))
+
+                fig_cu = go.Figure()
+                fig_cu.add_trace(go.Scatter(
+                    x=cu.index, y=cu.values,
+                    name="Capacity Utilization",
+                    line=dict(color="#C0392B", width=2.5),
+                    fill="tozeroy", fillcolor="rgba(192, 57, 43, 0.06)",
+                    hovertemplate="%{x|%b %Y}: %{y:.1f}%<extra></extra>",
+                ))
+                # Reference lines for tight/loose thresholds
+                fig_cu.add_hline(
+                    y=95, line_color="rgba(231, 76, 60, 0.4)", line_width=1,
+                    line_dash="dash", annotation_text="Tight (95%)",
+                    annotation_position="bottom right",
+                )
+                fig_cu.add_hline(
+                    y=90, line_color="rgba(46, 204, 113, 0.4)", line_width=1,
+                    line_dash="dash", annotation_text="Overcapacity (90%)",
+                    annotation_position="bottom right",
+                )
+                latest_cu = cu.iloc[-1]
+                fig_cu.update_layout(
+                    **_base_layout(title=f"Paper Sector Capacity Utilization — Latest: {latest_cu:.1f}%"),
+                    yaxis_title="Utilization (%)",
+                    yaxis_tickformat=".0f",
+                    height=400,
+                )
+                st.plotly_chart(fig_cu, width="stretch")
 
             st.divider()
 
@@ -2549,7 +3022,7 @@ else:
             summary_rows.append({
                 "Indicator": label_map.get(key) or sid,
                 "FRED ID": sid,
-                "Latest Value": f"{last_val:,.2f}",
+                "Latest Value": f"{last_val:,.1f}",
                 "As of": last_date,
                 "YoY %": round(yoy_val, 2) if yoy_val is not None else None,
             })
@@ -2643,7 +3116,6 @@ else:
                     height=250,
                 )
                 st.plotly_chart(fig_pi, width="stretch")
-                add_export_figure("Price Increase Timeline", fig_pi)
 
             # News table
             display_cols = [c for c in ["Date", "Headline", "Source"] if c in price_inc_df.columns]
@@ -2652,7 +3124,6 @@ else:
                 if "Date" in show_df.columns:
                     show_df["Date"] = show_df["Date"].dt.strftime("%Y-%m-%d")
                 st.dataframe(show_df.head(20), width="stretch", hide_index=True)
-                add_export_table("Price Increase Announcements", show_df)
         else:
             st.info(
                 "No containerboard price increase announcements found in recent RSS feeds. "
@@ -2678,7 +3149,6 @@ else:
                 if "Date" in show_df.columns:
                     show_df["Date"] = show_df["Date"].dt.strftime("%Y-%m-%d")
                 st.dataframe(show_df.head(15), width="stretch", hide_index=True)
-                add_export_table("Curtailment News", show_df)
         else:
             st.info(
                 "No recent downtime/curtailment mentions found. "
@@ -2687,9 +3157,264 @@ else:
             )
 
     elif industry_name == "Leisure":
-        # ── Leisure: Hotel & Cruise Metrics ───────────────────────────────
+        # ══════════════════════════════════════════════════════════════════
+        # LEISURE: HOTEL KPI TRACKER (RevPAR, ADR, Occupancy from 8-Ks)
+        # ══════════════════════════════════════════════════════════════════
         st.divider()
-        st.subheader("Hotel & Cruise Line Company Metrics")
+        st.header("Hotel KPI Tracker")
+
+        from data.hotel_kpi_data import (
+            HOTEL_KPI_DATA, HOTEL_KPI_LAST_UPDATED, HOTEL_KPI_NEXT_UPDATE,
+            HOTEL_KPI_LABEL, HOTEL_CHAIN_SCALE,
+        )
+        from utils.charts import (
+            hotel_revpar_grouped_bar, hotel_revpar_yoy_chart,
+            hotel_occ_line_chart, hotel_adr_occ_chart,
+        )
+
+        st.info(
+            f"Hotel KPI data: **{HOTEL_KPI_LAST_UPDATED}**  \n"
+            f"Next update: {HOTEL_KPI_NEXT_UPDATE}  \n"
+            "Source: Company 8-K earnings releases (SEC EDGAR)",
+        )
+
+        # ── Quarter parsing ──────────────────────────────────────────────
+        def _hq_key(q: str) -> tuple:
+            parts = q.split()
+            return (int(parts[1]), int(parts[0][1]))
+
+        hotel_quarters_all = sorted(
+            {row["quarter"] for t in HOTEL_KPI_DATA for row in HOTEL_KPI_DATA[t]},
+            key=_hq_key,
+        )
+
+        # ── Sidebar filters for hotel KPIs ───────────────────────────────
+        with st.sidebar:
+            st.subheader("Hotel KPI Filters")
+            h_preset = st.selectbox(
+                "Timeframe",
+                ["4 Quarters", "8 Quarters", "All Data"],
+                index=1,
+                key="hotel_kpi_preset",
+            )
+            h_n = {"4 Quarters": 4, "8 Quarters": 8, "All Data": len(hotel_quarters_all)}[h_preset]
+            h_q_list = hotel_quarters_all[-h_n:]
+
+            h_hotel_tickers = list(HOTEL_KPI_DATA.keys())
+            h_selected = st.multiselect(
+                "Hotel companies",
+                h_hotel_tickers,
+                default=h_hotel_tickers,
+                key="hotel_kpi_tickers",
+            )
+
+        # ── Build DataFrame ──────────────────────────────────────────────
+        def _build_hotel_df(tickers, q_list):
+            rows = []
+            for t in tickers:
+                for row in HOTEL_KPI_DATA.get(t, []):
+                    if row["quarter"] in q_list:
+                        rows.append({"ticker": t, **row})
+            return pd.DataFrame(rows)
+
+        hdf = _build_hotel_df(h_selected, h_q_list)
+
+        if hdf.empty:
+            st.warning("No hotel KPI data for the selected filters.")
+        else:
+            h_colors = {t: COMPANIES.get(t, {}).get("color", "#3498db") for t in h_hotel_tickers}
+
+            # ── Latest quarter summary metrics ───────────────────────────
+            latest_q = h_q_list[-1]
+            lq_rows = []
+            for t in h_selected:
+                data = HOTEL_KPI_DATA.get(t, [])
+                latest = [d for d in data if d["quarter"] == latest_q]
+                if latest:
+                    r = latest[0]
+                    lq_rows.append({
+                        "Ticker": t,
+                        "Company": COMPANIES.get(t, {}).get("name", t),
+                        "Chain Scale": HOTEL_CHAIN_SCALE.get(t, ""),
+                        "RevPAR": f"${r['revpar']:,.0f}",
+                        "RevPAR YoY": r["revpar_yoy"],
+                        "ADR": f"${r['adr']:,.0f}",
+                        "ADR YoY": r["adr_yoy"],
+                        "Occ %": r["occ"],
+                        "Occ Chg (pp)": r["occ_chg"],
+                    })
+            if lq_rows:
+                st.markdown(f"**Latest: {latest_q}**")
+                lq_df = pd.DataFrame(lq_rows).set_index("Ticker")
+
+                def _color_yoy(val):
+                    if isinstance(val, (int, float)):
+                        return f"color: {'#2ecc71' if val > 0 else '#e74c3c'}; font-weight: bold"
+                    return ""
+
+                st.dataframe(
+                    lq_df.style
+                        .map(_color_yoy, subset=["RevPAR YoY", "ADR YoY", "Occ Chg (pp)"])
+                        .format({
+                            "RevPAR YoY": "{:+.1f}%",
+                            "ADR YoY": "{:+.1f}%",
+                            "Occ %": "{:.1f}%",
+                            "Occ Chg (pp)": "{:+.1f}pp",
+                        }),
+                    use_container_width=True,
+                )
+
+            # ── RevPAR: Grouped bar (absolute) + YoY bar ────────────────
+            revpar_pivot = hdf.pivot_table(
+                index="quarter", columns="ticker", values="revpar", aggfunc="first"
+            )
+            revpar_pivot = revpar_pivot.reindex([q for q in h_q_list if q in revpar_pivot.index])
+
+            revpar_yoy_pivot = hdf.pivot_table(
+                index="quarter", columns="ticker", values="revpar_yoy", aggfunc="first"
+            )
+            revpar_yoy_pivot = revpar_yoy_pivot.reindex([q for q in h_q_list if q in revpar_yoy_pivot.index])
+
+            tab_bar, tab_yoy = st.tabs(["RevPAR ($)", "RevPAR YoY %"])
+            with tab_bar:
+                st.plotly_chart(
+                    hotel_revpar_grouped_bar(revpar_pivot, h_colors, title="RevPAR by Company ($)"),
+                    use_container_width=True,
+                )
+            with tab_yoy:
+                st.plotly_chart(
+                    hotel_revpar_yoy_chart(revpar_yoy_pivot, h_colors, title="RevPAR YoY Change (%)"),
+                    use_container_width=True,
+                )
+
+            # ── Occupancy rate line chart ────────────────────────────────
+            occ_pivot = hdf.pivot_table(
+                index="quarter", columns="ticker", values="occ", aggfunc="first"
+            )
+            occ_pivot = occ_pivot.reindex([q for q in h_q_list if q in occ_pivot.index])
+
+            st.plotly_chart(
+                hotel_occ_line_chart(occ_pivot, h_colors, title="Occupancy Rate (%)"),
+                use_container_width=True,
+            )
+
+            # ── ADR trend ────────────────────────────────────────────────
+            adr_pivot = hdf.pivot_table(
+                index="quarter", columns="ticker", values="adr", aggfunc="first"
+            )
+            adr_pivot = adr_pivot.reindex([q for q in h_q_list if q in adr_pivot.index])
+
+            fig_adr = go.Figure()
+            for ticker in adr_pivot.columns:
+                s = adr_pivot[ticker].dropna()
+                fig_adr.add_trace(go.Scatter(
+                    x=s.index, y=s.values, name=ticker,
+                    mode="lines+markers",
+                    line=dict(color=h_colors.get(ticker), width=2),
+                    marker=dict(size=6),
+                    hovertemplate=f"<b>{ticker}</b> %{{x}}: $%{{y:.0f}}<extra></extra>",
+                ))
+            fig_adr.update_layout(
+                **_base_layout(title="Average Daily Rate (ADR)"),
+                yaxis_title="ADR ($)", yaxis_tickprefix="$",
+                legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+                height=400,
+            )
+            st.plotly_chart(fig_adr, use_container_width=True)
+
+            # ── ADR vs Occupancy contribution per company ────────────────
+            st.subheader("ADR vs. Occupancy Contribution")
+            st.caption(
+                "How each company's RevPAR change breaks down between rate growth (ADR YoY %) "
+                "and occupancy change (percentage points)."
+            )
+            h_contrib_cols = st.columns(min(len(h_selected), 3))
+            for idx, t in enumerate(h_selected):
+                t_df = hdf[hdf["ticker"] == t].copy()
+                if t_df.empty:
+                    continue
+                with h_contrib_cols[idx % len(h_contrib_cols)]:
+                    st.plotly_chart(
+                        hotel_adr_occ_chart(t_df, t, h_colors.get(t, "#3498db"), quarters=h_q_list),
+                        use_container_width=True,
+                    )
+
+            # ── Chain scale spread: Luxury vs Economy RevPAR YoY ─────────
+            luxury_tickers = [t for t in h_selected if "Luxury" in HOTEL_CHAIN_SCALE.get(t, "")]
+            economy_tickers = [t for t in h_selected if "Economy" in HOTEL_CHAIN_SCALE.get(t, "")]
+            if luxury_tickers and economy_tickers:
+                spread_rows = []
+                for q in h_q_list:
+                    lux_vals = [
+                        next((d["revpar_yoy"] for d in HOTEL_KPI_DATA.get(t, []) if d["quarter"] == q), None)
+                        for t in luxury_tickers
+                    ]
+                    eco_vals = [
+                        next((d["revpar_yoy"] for d in HOTEL_KPI_DATA.get(t, []) if d["quarter"] == q), None)
+                        for t in economy_tickers
+                    ]
+                    lux_avg = np.nanmean([v for v in lux_vals if v is not None]) if any(v is not None for v in lux_vals) else np.nan
+                    eco_avg = np.nanmean([v for v in eco_vals if v is not None]) if any(v is not None for v in eco_vals) else np.nan
+                    spread_rows.append({
+                        "Quarter": q,
+                        "Luxury/Upper Upscale": round(lux_avg, 1) if not np.isnan(lux_avg) else None,
+                        "Midscale/Economy": round(eco_avg, 1) if not np.isnan(eco_avg) else None,
+                        "Spread": round(lux_avg - eco_avg, 1) if not (np.isnan(lux_avg) or np.isnan(eco_avg)) else None,
+                    })
+                spread_df = pd.DataFrame(spread_rows).dropna(subset=["Spread"])
+                if not spread_df.empty:
+                    st.subheader("Chain Scale Spread: Luxury vs. Economy RevPAR YoY")
+                    fig_sp = go.Figure()
+                    fig_sp.add_trace(go.Bar(
+                        x=spread_df["Quarter"], y=spread_df["Spread"],
+                        marker_color=[("#2ecc71" if v >= 0 else "#e74c3c") for v in spread_df["Spread"]],
+                        hovertemplate="%{x}: %{y:+.1f}pp<extra></extra>",
+                        name="Spread (pp)",
+                    ))
+                    fig_sp.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1)
+                    fig_sp.update_layout(
+                        **_base_layout(title="Luxury/Upper Upscale minus Midscale/Economy RevPAR YoY (pp)"),
+                        yaxis_title="Spread (pp)", height=340,
+                    )
+                    st.plotly_chart(fig_sp, use_container_width=True)
+                    st.caption(
+                        "Positive spread = luxury outperforming economy. "
+                        f"Luxury/Upper Upscale: {', '.join(luxury_tickers)}. "
+                        f"Midscale/Economy: {', '.join(economy_tickers)}. "
+                        "HLT (Upper Upscale / Upscale) excluded from both groups."
+                    )
+
+            # ── Full data table ──────────────────────────────────────────
+            with st.expander("Show Full Hotel KPI Data"):
+                table_df = hdf[["quarter", "ticker", "revpar", "revpar_yoy", "adr", "adr_yoy", "occ", "occ_chg"]].copy()
+                table_df["company"] = table_df["ticker"].map(lambda t: COMPANIES.get(t, {}).get("name", t))
+                table_df = table_df.rename(columns={
+                    "quarter": "Quarter", "ticker": "Ticker", "company": "Company",
+                    "revpar": "RevPAR ($)", "revpar_yoy": "RevPAR YoY %",
+                    "adr": "ADR ($)", "adr_yoy": "ADR YoY %",
+                    "occ": "Occ %", "occ_chg": "Occ Chg (pp)",
+                })
+                table_df = table_df.sort_values(
+                    ["Quarter", "Ticker"],
+                    key=lambda col: col.map(_hq_key) if col.name == "Quarter" else col,
+                )
+                st.dataframe(
+                    table_df.style
+                        .map(_color_yoy, subset=["RevPAR YoY %", "ADR YoY %", "Occ Chg (pp)"])
+                        .format({
+                            "RevPAR ($)": "${:,.0f}",
+                            "RevPAR YoY %": "{:+.1f}%",
+                            "ADR ($)": "${:,.0f}",
+                            "ADR YoY %": "{:+.1f}%",
+                            "Occ %": "{:.1f}%",
+                            "Occ Chg (pp)": "{:+.1f}pp",
+                        }),
+                    use_container_width=True, height=500,
+                )
+
+        # ── Leisure: Hotel & Cruise Financial Metrics ────────────────────
+        st.divider()
+        st.subheader("Hotel & Cruise Line Financial Metrics")
         st.caption(
             "Quarterly financials for hotel chains (MAR, HLT, H) and cruise lines (RCL, CCL, NCLH) — "
             "revenue and EBITDA comparison. Data from stockanalysis.com."
@@ -2721,18 +3446,65 @@ else:
                         y=tkr_df["Revenue"] / 1e9,
                         name=tkr,
                         marker_color=hotel_colors[i % len(hotel_colors)],
+                        hovertemplate=f"<b>{tkr}</b><br>" + "%{x}: $%{y:.1f}B<extra></extra>",
                     ))
                 fig_hotel_rev.update_layout(
                     **_base_layout(title="Hotel Company Quarterly Revenue ($B)"),
-                    barmode="group", yaxis_title="Revenue ($B)", height=420,
+                    barmode="group", yaxis_title="Revenue ($B)",
+                    yaxis_tickformat="$,.1f", height=420,
                     legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
                 )
                 st.plotly_chart(fig_hotel_rev, width="stretch")
-                add_export_figure("Hotel Quarterly Revenue", fig_hotel_rev)
+
+                # EBITDA & Margin side-by-side
+                col_he, col_hm = st.columns(2)
+                with col_he:
+                    st.markdown("**Quarterly EBITDA**")
+                    fig_he = go.Figure()
+                    for i, tkr in enumerate(fin_hotel_tickers):
+                        tkr_df = hotel_fin_df[hotel_fin_df["Ticker"] == tkr].dropna(subset=["EBITDA"]).tail(8)
+                        if tkr_df.empty:
+                            continue
+                        fig_he.add_trace(go.Bar(
+                            x=tkr_df["Quarter"].apply(lambda d: f"{d.year}-Q{(d.month-1)//3+1}") if pd.api.types.is_datetime64_any_dtype(tkr_df["Quarter"]) else tkr_df["Quarter"].astype(str),
+                            y=tkr_df["EBITDA"] / 1e6,
+                            name=tkr,
+                            marker_color=hotel_colors[i % len(hotel_colors)],
+                            hovertemplate=f"<b>{tkr}</b><br>" + "%{x}: $%{y:,.0f}M<extra></extra>",
+                        ))
+                    fig_he.update_layout(
+                        **_base_layout(title="Hotel EBITDA ($M)"),
+                        barmode="group", yaxis_title="EBITDA ($M)",
+                        yaxis_tickformat="$,.0f", height=380,
+                        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+                    )
+                    st.plotly_chart(fig_he, width="stretch")
+
+                with col_hm:
+                    st.markdown("**EBITDA Margin Trend**")
+                    fig_hm = go.Figure()
+                    for i, tkr in enumerate(fin_hotel_tickers):
+                        tkr_df = hotel_fin_df[hotel_fin_df["Ticker"] == tkr].dropna(subset=["EBITDA Margin"]).tail(8)
+                        if tkr_df.empty:
+                            continue
+                        margin_vals = tkr_df["EBITDA Margin"] * 100 if tkr_df["EBITDA Margin"].max() < 1 else tkr_df["EBITDA Margin"]
+                        fig_hm.add_trace(go.Scatter(
+                            x=tkr_df["Quarter"],
+                            y=margin_vals,
+                            name=tkr, mode="lines+markers",
+                            line=dict(color=hotel_colors[i % len(hotel_colors)], width=2),
+                            hovertemplate=f"<b>{tkr}</b><br>" + "%{x|%b %Y}: %{y:.1f}%<extra></extra>",
+                        ))
+                    fig_hm.update_layout(
+                        **_base_layout(title="Hotel EBITDA Margin (%)"),
+                        yaxis_title="Margin (%)", yaxis_tickformat=".0f",
+                        height=380,
+                        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+                    )
+                    st.plotly_chart(fig_hm, width="stretch")
 
                 with st.expander("Hotel Financials Data"):
                     st.dataframe(hotel_fin_df, width="stretch", height=400)
-                    add_export_table("Hotel Financials", hotel_fin_df)
             else:
                 st.info("Hotel company financial data not available.")
 
@@ -2754,14 +3526,62 @@ else:
                         y=tkr_df["Revenue"] / 1e9,
                         name=tkr,
                         marker_color=cruise_colors[i % len(cruise_colors)],
+                        hovertemplate=f"<b>{tkr}</b><br>" + "%{x}: $%{y:.1f}B<extra></extra>",
                     ))
                 fig_cruise_rev.update_layout(
                     **_base_layout(title="Cruise Line Quarterly Revenue ($B)"),
-                    barmode="group", yaxis_title="Revenue ($B)", height=420,
+                    barmode="group", yaxis_title="Revenue ($B)",
+                    yaxis_tickformat="$,.1f", height=420,
                     legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
                 )
                 st.plotly_chart(fig_cruise_rev, width="stretch")
-                add_export_figure("Cruise Line Quarterly Revenue", fig_cruise_rev)
+
+                # EBITDA & Margin side-by-side
+                col_ce, col_cm = st.columns(2)
+                with col_ce:
+                    st.markdown("**Quarterly EBITDA**")
+                    fig_ce = go.Figure()
+                    for i, tkr in enumerate(fin_cruise_tickers):
+                        tkr_df = cruise_fin_df[cruise_fin_df["Ticker"] == tkr].dropna(subset=["EBITDA"]).tail(8)
+                        if tkr_df.empty:
+                            continue
+                        fig_ce.add_trace(go.Bar(
+                            x=tkr_df["Quarter"].apply(lambda d: f"{d.year}-Q{(d.month-1)//3+1}") if pd.api.types.is_datetime64_any_dtype(tkr_df["Quarter"]) else tkr_df["Quarter"].astype(str),
+                            y=tkr_df["EBITDA"] / 1e6,
+                            name=tkr,
+                            marker_color=cruise_colors[i % len(cruise_colors)],
+                            hovertemplate=f"<b>{tkr}</b><br>" + "%{x}: $%{y:,.0f}M<extra></extra>",
+                        ))
+                    fig_ce.update_layout(
+                        **_base_layout(title="Cruise Line EBITDA ($M)"),
+                        barmode="group", yaxis_title="EBITDA ($M)",
+                        yaxis_tickformat="$,.0f", height=380,
+                        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+                    )
+                    st.plotly_chart(fig_ce, width="stretch")
+
+                with col_cm:
+                    st.markdown("**EBITDA Margin Trend**")
+                    fig_cm = go.Figure()
+                    for i, tkr in enumerate(fin_cruise_tickers):
+                        tkr_df = cruise_fin_df[cruise_fin_df["Ticker"] == tkr].dropna(subset=["EBITDA Margin"]).tail(8)
+                        if tkr_df.empty:
+                            continue
+                        margin_vals = tkr_df["EBITDA Margin"] * 100 if tkr_df["EBITDA Margin"].max() < 1 else tkr_df["EBITDA Margin"]
+                        fig_cm.add_trace(go.Scatter(
+                            x=tkr_df["Quarter"],
+                            y=margin_vals,
+                            name=tkr, mode="lines+markers",
+                            line=dict(color=cruise_colors[i % len(cruise_colors)], width=2),
+                            hovertemplate=f"<b>{tkr}</b><br>" + "%{x|%b %Y}: %{y:.1f}%<extra></extra>",
+                        ))
+                    fig_cm.update_layout(
+                        **_base_layout(title="Cruise Line EBITDA Margin (%)"),
+                        yaxis_title="Margin (%)", yaxis_tickformat=".0f",
+                        height=380,
+                        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+                    )
+                    st.plotly_chart(fig_cm, width="stretch")
 
                 # Fuel cost overlay: crude oil vs cruise stocks
                 if fred_key_available():
@@ -2773,6 +3593,7 @@ else:
                             name="WTI Crude Oil ($/bbl)",
                             line=dict(color="#e74c3c", width=2),
                             fill="tozeroy", fillcolor="rgba(231, 76, 60, 0.08)",
+                            hovertemplate="%{x|%b %d, %Y}: $%{y:.1f}/bbl<extra></extra>",
                         ))
                         fig_fuel.update_layout(
                             **_base_layout(title="Crude Oil (WTI) — Key Cruise Line Cost Driver"),
@@ -2786,7 +3607,6 @@ else:
 
                 with st.expander("Cruise Line Financials Data"):
                     st.dataframe(cruise_fin_df, width="stretch", height=400)
-                    add_export_table("Cruise Financials", cruise_fin_df)
             else:
                 st.info("Cruise line financial data not available.")
 
@@ -2810,4 +3630,3 @@ else:
         st.dataframe(pd.DataFrame(comp_rows).set_index("Ticker"), width="stretch")
 
 # ── Export sidebar (all industries) ────────────────────────────────────
-render_export_sidebar(cfg["name"])

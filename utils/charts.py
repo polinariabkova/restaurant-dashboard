@@ -30,6 +30,8 @@ def _base_layout(**kwargs) -> dict:
         base["yaxis"] = dict(gridcolor=GRID_COLOR, showgrid=True)
     if "margin" not in kwargs:
         base["margin"] = dict(l=50, r=20, t=40, b=40)
+    if "bargap" not in kwargs:
+        base["bargap"] = 0.08
     base.update(kwargs)
     return base
 
@@ -780,4 +782,99 @@ def state_ggr_bar_chart(
         xaxis_tickformat="$,.0s",
         height=max(400, len(df_sorted) * 28),
     )
+    return fig
+
+
+# ── Hotel KPI charts ─────────────────────────────────────────────────────
+
+def hotel_revpar_grouped_bar(df: pd.DataFrame, colors: dict,
+                             title: str = "RevPAR by Company ($)") -> go.Figure:
+    """Grouped bar chart of RevPAR by quarter and company."""
+    fig = go.Figure()
+    for ticker in df.columns:
+        fig.add_trace(go.Bar(
+            x=df.index, y=df[ticker], name=ticker,
+            marker_color=colors.get(ticker, None),
+            hovertemplate=f"<b>{ticker}</b>: $%{{y:.0f}}<extra></extra>",
+        ))
+    fig.update_layout(
+        **_base_layout(title=title),
+        barmode="group", yaxis_title="RevPAR ($)", yaxis_tickprefix="$",
+        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+        height=420,
+    )
+    return fig
+
+
+def hotel_revpar_yoy_chart(df: pd.DataFrame, colors: dict,
+                           title: str = "RevPAR YoY Change (%)") -> go.Figure:
+    """Grouped bar chart of RevPAR YoY % change."""
+    fig = go.Figure()
+    for ticker in df.columns:
+        fig.add_trace(go.Bar(
+            x=df.index, y=df[ticker], name=ticker,
+            marker_color=colors.get(ticker, None),
+            hovertemplate=f"<b>{ticker}</b>: %{{y:+.1f}}%<extra></extra>",
+        ))
+    fig.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1, opacity=0.6)
+    fig.update_layout(
+        **_base_layout(title=title),
+        barmode="group", yaxis_title="YoY %",
+        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+        height=420,
+    )
+    return fig
+
+
+def hotel_occ_line_chart(df: pd.DataFrame, colors: dict,
+                         title: str = "Occupancy Rate (%)") -> go.Figure:
+    """Line chart of occupancy rate over time."""
+    fig = go.Figure()
+    for ticker in df.columns:
+        s = df[ticker].dropna()
+        fig.add_trace(go.Scatter(
+            x=s.index, y=s.values, name=ticker,
+            mode="lines+markers",
+            line=dict(color=colors.get(ticker), width=2),
+            marker=dict(size=6),
+            hovertemplate=f"<b>{ticker}</b> %{{x}}: %{{y:.1f}}%<extra></extra>",
+        ))
+    fig.update_layout(
+        **_base_layout(title=title),
+        yaxis_title="Occupancy %",
+        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0),
+        height=400,
+    )
+    return fig
+
+
+def hotel_adr_occ_chart(
+    df: pd.DataFrame, ticker: str, color: str,
+    quarters: list | None = None,
+) -> go.Figure:
+    """Stacked bar: ADR vs occupancy contribution to RevPAR change."""
+    valid = df.dropna(subset=["adr_yoy", "occ_chg"])
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=valid["quarter"], y=valid["adr_yoy"],
+        name="ADR", marker_color=color, opacity=0.85,
+        hovertemplate="ADR: %{y:+.1f}%<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=valid["quarter"], y=valid["occ_chg"],
+        name="Occupancy (pp)", marker_color="#95a5a6",
+        hovertemplate="Occ: %{y:+.1f}pp<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_color="rgba(0,0,0,0.2)", line_width=1, opacity=0.6)
+    layout_kw = {
+        **_base_layout(title=f"{ticker} \u2013 ADR vs. Occupancy Contribution"),
+        "barmode": "group",
+        "yaxis_title": "YoY Change",
+        "height": 360,
+    }
+    if quarters:
+        layout_kw["xaxis"] = dict(
+            categoryorder="array", categoryarray=quarters, type="category",
+        )
+    fig.update_layout(**layout_kw)
     return fig

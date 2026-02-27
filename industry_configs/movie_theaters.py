@@ -6,6 +6,15 @@ CONFIG = {
     "name": "Movie Theaters",
     "icon": "\U0001f3ac",  # clapper board
 
+    "page_titles": {
+        "stocks":       "Stock Performance",
+        "kpis":         "Box Office & KPIs",
+        "market":       "Market Drivers",
+        "fundamentals": "Fundamentals",
+        "macro":        "Movie Industry & Macro",
+        "news":         "Movie Industry News",
+    },
+
     "companies": {
         "CNK":  {"name": "Cinemark",       "segment": "Exhibitors", "color": "#E74C3C"},
         "IMAX": {"name": "IMAX Corp",      "segment": "Technology", "color": "#2C3E50"},

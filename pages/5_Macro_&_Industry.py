@@ -17,10 +17,6 @@ from utils.charts import (
     job_openings_chart, _base_layout,
 )
 from utils.style import inject_css
-from utils.export import (
-    reset_export_state, add_export_figure, add_export_table,
-    add_export_metric, render_export_sidebar,
-)
 
 st.set_page_config(page_title="Macro & Industry", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "assets", "arini_logo.svg"))
@@ -29,8 +25,7 @@ inject_css()
 # ── Industry selector (very top) ─────────────────────────────────────────
 cfg = render_industry_selector()
 
-st.title("Macro & Industry Environment")
-reset_export_state()
+st.title(cfg.get("page_titles", {}).get("macro", "Macro & Industry Environment"))
 fs = cfg["fred_series"]
 lbl = cfg["macro_labels"]
 
@@ -83,7 +78,7 @@ if not ind_1.empty:
         c1.metric(
             f"{lbl['cpi_industry_1_label']} — {yoy_1.index[-1].strftime('%b %Y')}",
             f"{yoy_1.iloc[-1]:.1f}% YoY",
-            f"{yoy_1.iloc[-1] - yoy_1.iloc[-2]:.2f}pp MoM" if len(yoy_1) > 1 else None,
+            f"{yoy_1.iloc[-1] - yoy_1.iloc[-2]:.1f}pp MoM" if len(yoy_1) > 1 else None,
         )
 
 if not ind_2.empty and lbl.get("cpi_industry_2_label"):
@@ -92,7 +87,7 @@ if not ind_2.empty and lbl.get("cpi_industry_2_label"):
         c2.metric(
             f"{lbl['cpi_industry_2_label']} — {yoy_2.index[-1].strftime('%b %Y')}",
             f"{yoy_2.iloc[-1]:.1f}% YoY",
-            f"{yoy_2.iloc[-1] - yoy_2.iloc[-2]:.2f}pp MoM" if len(yoy_2) > 1 else None,
+            f"{yoy_2.iloc[-1] - yoy_2.iloc[-2]:.1f}pp MoM" if len(yoy_2) > 1 else None,
         )
 
 if not wages_data.empty:
@@ -101,7 +96,7 @@ if not wages_data.empty:
         c3.metric(
             f"{lbl['wages_label']} — {yoy_w.index[-1].strftime('%b %Y')}",
             f"{yoy_w.iloc[-1]:.1f}% YoY",
-            f"{yoy_w.iloc[-1] - yoy_w.iloc[-2]:.2f}pp MoM" if len(yoy_w) > 1 else None,
+            f"{yoy_w.iloc[-1] - yoy_w.iloc[-2]:.1f}pp MoM" if len(yoy_w) > 1 else None,
         )
 
 if not unemployment.empty:
@@ -126,7 +121,7 @@ if not fed_funds.empty:
     c6.metric(
         f"Fed Funds Rate — {fed_funds.index[-1].strftime('%b %Y')}",
         f"{fed_funds.iloc[-1]:.2f}%",
-        f"{fed_funds.iloc[-1] - fed_funds.iloc[-2]:.2f}pp MoM" if len(fed_funds) > 1 else None,
+        f"{fed_funds.iloc[-1] - fed_funds.iloc[-2]:.1f}pp MoM" if len(fed_funds) > 1 else None,
         delta_color="inverse",
     )
 
@@ -143,7 +138,7 @@ if not cpi_all.empty:
         c8.metric(
             f"CPI All Items — {yoy_cpi.index[-1].strftime('%b %Y')}",
             f"{yoy_cpi.iloc[-1]:.1f}% YoY",
-            f"{yoy_cpi.iloc[-1] - yoy_cpi.iloc[-2]:.2f}pp MoM" if len(yoy_cpi) > 1 else None,
+            f"{yoy_cpi.iloc[-1] - yoy_cpi.iloc[-2]:.1f}pp MoM" if len(yoy_cpi) > 1 else None,
         )
 
 st.divider()
@@ -328,6 +323,3 @@ st.caption(
                             fs.get("job_openings")] if v)
     + "."
 )
-
-# ── Export sidebar ─────────────────────────────────────────────────────
-render_export_sidebar(cfg["name"])
